@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.33.2';
+const APP_VERSION = '3.0.0-dev';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -2338,8 +2338,9 @@ function startAnnotate() {
   viewer.addEventListener('touchstart',  _annTStart, { passive:false });
   viewer.addEventListener('touchmove',   _annTMove,  { passive:false });
   viewer.addEventListener('touchend',    _annTEnd,   { passive:false });
-  document.getElementById('btnAnnotate').classList.add('active');
-  document.getElementById('annotatePanel').style.display = 'block';
+  document.getElementById('btnAnnotate')?.classList.add('active');
+  const _ap = document.getElementById('annotatePanel');
+  if (_ap) _ap.style.display = 'block';
 }
 
 function stopAnnotate() {
@@ -2354,7 +2355,7 @@ function stopAnnotate() {
   viewer.removeEventListener('touchstart',  _annTStart);
   viewer.removeEventListener('touchmove',   _annTMove);
   viewer.removeEventListener('touchend',    _annTEnd);
-  document.getElementById('btnAnnotate').classList.remove('active');
+  document.getElementById('btnAnnotate')?.classList.remove('active');
   // Panel queda visible per canviar colors/esborrar traços
 }
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4215,9 +4216,9 @@ function _startErase(mode) {
     ? '⬜ Rectangle erase — drag to select, release to delete'
     : '✏ Freehand erase — draw around area, release to delete';
   badge.style.display = 'block';
-  document.getElementById('lassoCancel').style.display = 'block';
-  document.getElementById('btnRectErase').classList.toggle('active', mode === 'rect');
-  document.getElementById('btnLassoErase').classList.toggle('active', mode === 'lasso');
+  const _lc = document.getElementById('lassoCancel'); if (_lc) _lc.style.display = 'block';
+  document.getElementById('btnRectErase')?.classList.toggle('active', mode === 'rect');
+  document.getElementById('btnLassoErase')?.classList.toggle('active', mode === 'lasso');
   viewer.classList.add('lasso-active');
 
   // Bloquejar canvas Three.js — els events cauen al viewer
@@ -4254,10 +4255,10 @@ function _stopErase() {
   const lc = _eraseCanvas();
   lc.style.display = 'none';
   _clearCanvas();
-  document.getElementById('lassoBadge').style.display   = 'none';
-  document.getElementById('lassoCancel').style.display  = 'none';
-  document.getElementById('btnRectErase').classList.remove('active');
-  document.getElementById('btnLassoErase').classList.remove('active');
+  const _lb = document.getElementById('lassoBadge'); if (_lb) _lb.style.display = 'none';
+  const _lc = document.getElementById('lassoCancel'); if (_lc) _lc.style.display = 'none';
+  document.getElementById('btnRectErase')?.classList.remove('active');
+  document.getElementById('btnLassoErase')?.classList.remove('active');
 }
 
 // Mantenim l'alias que usa la resta del codi (reset, etc.)
@@ -4887,8 +4888,9 @@ function setupUI() {
   document.getElementById('btnExportSection').onclick = exportClipSectionDXF;
 
   // ── Alineació ──
-  document.getElementById('align2pt').onclick = () => startAlign(2);
-  document.getElementById('align3pt').onclick = () => startAlign(3);
+  // Alinear 2 punts eliminat a v3 — es manté la lògica de startAlign per si cal reactivar-la.
+  const _align2 = document.getElementById('align2pt'); if (_align2) _align2.onclick = () => startAlign(2);
+  const _align3 = document.getElementById('align3pt'); if (_align3) _align3.onclick = () => startAlign(3);
 
   // ── Auto-align per color ──
   let _autoAlignPending = null;
@@ -5015,8 +5017,9 @@ function setupUI() {
     }
   });
 
-  // ── Annotate / Draw ──
-  document.getElementById('btnAnnotate').onclick = () => {
+  // ── Annotate / Draw (eliminat de la UI v3; es manté el codi inert per si cal) ──
+  const _btnAnnotate = document.getElementById('btnAnnotate');
+  if (_btnAnnotate) _btnAnnotate.onclick = () => {
     if (_annActive) { stopAnnotate(); return; }
     if (lassoErasing) _stopErase();
     startAnnotate();
@@ -5046,30 +5049,35 @@ function setupUI() {
   if (annWidthEl) annWidthEl.oninput = () => { _annWidth = +annWidthEl.value; };
 
   // Undo últim traç
-  document.getElementById('annUndo').onclick = () => {
+  const _annUndoEl = document.getElementById('annUndo');
+  if (_annUndoEl) _annUndoEl.onclick = () => {
     if (_annStrokes.length) { _annStrokes.pop(); _annRedraw(); }
   };
 
   // Esborra tot
-  document.getElementById('annClear').onclick = () => {
+  const _annClearEl = document.getElementById('annClear');
+  if (_annClearEl) _annClearEl.onclick = () => {
     _annStrokes = []; _annRedraw();
   };
 
   // Redimensiona el canvas d'anotació quan la finestra canvia de mida
   window.addEventListener('resize', () => { if (_annStrokes.length) _annResize(); });
 
-  // ── Erase tools ──
-  document.getElementById('btnRectErase').onclick = () => {
+  // ── Erase tools (eliminats de la UI v3; es manté el codi inert) ──
+  const _btnRectErase = document.getElementById('btnRectErase');
+  if (_btnRectErase) _btnRectErase.onclick = () => {
     if (lassoErasing && _eraseMode === 'rect') { _stopErase(); return; }
     cancelAlign();
     _startErase('rect');
   };
-  document.getElementById('btnLassoErase').onclick = () => {
+  const _btnLassoErase = document.getElementById('btnLassoErase');
+  if (_btnLassoErase) _btnLassoErase.onclick = () => {
     if (lassoErasing && _eraseMode === 'lasso') { _stopErase(); return; }
     cancelAlign();
     _startErase('lasso');
   };
-  document.getElementById('lassoCancel').onclick = () => { if (_picking) _pickStop(); else _stopErase(); };
+  const _lassoCancel = document.getElementById('lassoCancel');
+  if (_lassoCancel) _lassoCancel.onclick = () => { if (_picking) _pickStop(); else _stopErase(); };
 
   // ── Selecció per traçat (llaç → frustum 3D) ──
   document.getElementById('btnLassoPick')?.addEventListener('click', () => {

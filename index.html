@@ -815,12 +815,11 @@
       <!-- ALINEAR -->
       <div class="acc">
         <div class="acc-header" data-acc="accAlign">
-          <span><span class="acc-icon">&#10022;</span>Alinear 2 Punts / ICP</span>
+          <span><span class="acc-icon">&#10022;</span>Alinear 3 Punts / ICP</span>
           <span class="acc-arrow">&#9654;</span>
         </div>
         <div class="acc-body" id="accAlign-body">
           <div class="btn-row">
-            <button id="align2pt">&#9679;&#9679; Alinear 2 punts</button>
             <button id="align3pt">&#9679;&#9679;&#9679; Alinear 3 punts</button>
           </div>
           <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#889;margin-top:6px;cursor:pointer;user-select:none;">
@@ -920,42 +919,7 @@
         </div>
       </div>
 
-      <!-- CLEAN & MARKUP -->
-      <div class="acc">
-        <div class="acc-header" data-acc="accClean">
-          <span><span class="acc-icon">&#9999;</span>Clean &amp; Markup</span>
-          <span class="acc-arrow">&#9654;</span>
-        </div>
-        <div class="acc-body" id="accClean-body">
-          <div class="btn-row">
-            <button id="btnRectErase">&#9644; Rectangle</button>
-            <button id="btnLassoErase">&#9999; Lliure</button>
-          </div>
-          <button id="btnAnnotate" style="margin-top:4px">&#9998; Dibuix / Anotació</button>
-          <div id="annotatePanel">
-            <div class="color-row">
-              <div class="ann-color selected" data-color="#ff4444" style="background:#ff4444"></div>
-              <div class="ann-color" data-color="#ffdd00" style="background:#ffdd00"></div>
-              <div class="ann-color" data-color="#00ddff" style="background:#00ddff"></div>
-              <div class="ann-color" data-color="#00ff88" style="background:#00ff88"></div>
-              <div class="ann-color" data-color="#ffffff" style="background:#ffffff"></div>
-            </div>
-            <div class="mode-row">
-              <button id="annModeFree" class="active">&#9999; Lliure</button>
-              <button id="annModeLine">&#9135; Línia</button>
-              <button id="annModeArrow">&#8594; Fletxa</button>
-            </div>
-            <div class="slider-row">
-              <span>Gruix:</span>
-              <input type="range" id="annWidth" min="1" max="8" value="2">
-            </div>
-            <div class="btn-row" style="margin-top:4px">
-              <button id="annUndo">&#8617; Desfer traç</button>
-              <button id="annClear" class="btn-red">&#128465; Netejar</button>
-            </div>
-          </div>
-        </div>
-      </div>
+      <!-- CLEAN & MARKUP eliminat a v3 (eines que no funcionaven correctament) -->
 
       <!-- DXF OVERLAY -->
       <div class="acc">
@@ -1338,7 +1302,7 @@
   <script src="https://apis.google.com/js/api.js" async defer></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="drive.js"></script>
-  <script type="module" src="main.js?v=2026102103"></script>
+  <script type="module" src="main.js?v=v3-2026102301"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
