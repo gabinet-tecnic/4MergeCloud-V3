@@ -1280,29 +1280,140 @@ function updateClipPlanes() {
   // shader a cada fotograma i deixa la navegació lenta quan hi ha caixa de tall.
   // Es creen els plans un sol cop i després es MUTEN in-place (sense recompilar);
   // només es marca needsUpdate quan canvia el NOMBRE de plans (activa/desactiva clipping).
+  const hSlabActive = (window._hSlabTopPct > 0 || window._hSlabBotPct > 0);
+  const hPlanes = hSlabActive ? _computeHSlabPlanes() : null;
   clouds.forEach(cloud => {
-    // Recull tots els materials afectats: el del núvol + els de la vista malla si existeix
     const materials = [];
     if (cloud.material) materials.push(cloud.material);
     if (cloud.userData?.meshView) {
       cloud.userData.meshView.traverse(o => { if (o.isMesh && o.material) materials.push(o.material); });
     }
     const box = cloud.userData.clipBox;
+    const needed = (box ? LOCAL_CLIP_PLANES.length : 0) + (hPlanes ? hPlanes.length : 0);
     for (const mat of materials) {
-      if (!box) {
+      if (needed === 0) {
         if (mat.clippingPlanes && mat.clippingPlanes.length) { mat.clippingPlanes = []; mat.needsUpdate = true; }
         continue;
       }
-      box.updateMatrixWorld(true);
-      if (!mat.clippingPlanes || mat.clippingPlanes.length !== LOCAL_CLIP_PLANES.length) {
-        mat.clippingPlanes = LOCAL_CLIP_PLANES.map(() => new THREE.Plane());
+      if (!mat.clippingPlanes || mat.clippingPlanes.length !== needed) {
+        mat.clippingPlanes = Array.from({ length: needed }, () => new THREE.Plane());
         mat.needsUpdate = true;
       }
-      for (let i = 0; i < LOCAL_CLIP_PLANES.length; i++) {
-        mat.clippingPlanes[i].copy(LOCAL_CLIP_PLANES[i]).applyMatrix4(box.matrixWorld);
+      let idx = 0;
+      if (box) {
+        box.updateMatrixWorld(true);
+        for (let i = 0; i < LOCAL_CLIP_PLANES.length; i++) {
+          mat.clippingPlanes[idx++].copy(LOCAL_CLIP_PLANES[i]).applyMatrix4(box.matrixWorld);
+        }
+      }
+      if (hPlanes) {
+        for (let i = 0; i < hPlanes.length; i++) mat.clippingPlanes[idx++].copy(hPlanes[i]);
       }
     }
   });
+}
+
+// Secció horitzontal (dos plans mundials): retalla els núvols perquè només es
+// vegi una llesca entre el pla superior (que ve de dalt) i l'inferior (que ve
+// de baix). Els percentatges són 0..100 i es converteixen a plans mundials
+// usant la bbox global dels núvols actius.
+window._hSlabTopPct = 0;    // % des de dalt (0 = no retalla, 100 = tot amagat)
+window._hSlabBotPct = 0;    // % des de baix
+
+function _globalYRange() {
+  const box = new THREE.Box3();
+  let any = false;
+  for (const c of clouds) {
+    if (!c.visible) continue;
+    const b = new THREE.Box3().setFromObject(c);
+    if (!b.isEmpty()) { box.union(b); any = true; }
+  }
+  if (!any) return null;
+  return { minY: box.min.y, maxY: box.max.y };
+}
+
+function _computeHSlabPlanes() {
+  const r = _globalYRange();
+  if (!r) return null;
+  const span = Math.max(1e-6, r.maxY - r.minY);
+  const topY = r.maxY - (window._hSlabTopPct / 100) * span;  // pla superior; tot ha de quedar sota
+  const botY = r.minY + (window._hSlabBotPct / 100) * span;  // pla inferior; tot ha de quedar sobre
+  const planes = [];
+  // Pla superior: normal cap avall, constant tal que distanceToPoint(p) = topY - p.y ≥ 0 ⇔ p.y ≤ topY
+  if (window._hSlabTopPct > 0) planes.push(new THREE.Plane(new THREE.Vector3(0, -1, 0), topY));
+  // Pla inferior: normal cap amunt, distanceToPoint(p) = p.y - botY ≥ 0 ⇔ p.y ≥ botY
+  if (window._hSlabBotPct > 0) planes.push(new THREE.Plane(new THREE.Vector3(0,  1, 0), -botY));
+  return planes.length ? planes : null;
+}
+
+// Retorna les coordenades Y actuals (en metres) dels dos plans de la secció.
+function _hSlabYs() {
+  const r = _globalYRange();
+  if (!r) return { topY: null, botY: null };
+  const span = Math.max(1e-6, r.maxY - r.minY);
+  return {
+    topY: r.maxY - (window._hSlabTopPct / 100) * span,
+    botY: r.minY + (window._hSlabBotPct / 100) * span,
+  };
+}
+
+// Exporta la llesca horitzontal actual: tots els punts amb y entre botY i topY.
+// Format: PLY (3D amb color) o DXF (projecció al pla XZ com a punts).
+function _exportHSlab(format) {
+  if (clouds.length === 0) { alert('No hi ha cap núvol carregat.'); return; }
+  const { topY, botY } = _hSlabYs();
+  if (topY == null) { alert('No es pot calcular els límits del núvol.'); return; }
+  const yHigh = Math.max(topY, botY);
+  const yLow  = Math.min(topY, botY);
+  const outPts = [];      // {x,y,z,r,g,b}
+  for (const c of clouds) {
+    if (!c.visible) continue;
+    c.updateMatrixWorld(true);
+    const pos = c.geometry.getAttribute('position');
+    const col = c.geometry.getAttribute('color');
+    const mw  = c.matrixWorld;
+    const v = new THREE.Vector3();
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(mw);
+      if (v.y < yLow || v.y > yHigh) continue;
+      const r = col ? col.getX(i) : 0.8;
+      const g = col ? col.getY(i) : 0.8;
+      const b = col ? col.getZ(i) : 0.8;
+      outPts.push([v.x, v.y, v.z, r, g, b]);
+    }
+  }
+  if (!outPts.length) { alert('La llesca està buida — no hi ha cap punt entre els dos plans.'); return; }
+  const base = 'seccio_' + new Date().toISOString().slice(0, 10);
+  if (format === 'ply') {
+    const header =
+      'ply\nformat ascii 1.0\n' +
+      'element vertex ' + outPts.length + '\n' +
+      'property float x\nproperty float y\nproperty float z\n' +
+      'property uchar red\nproperty uchar green\nproperty uchar blue\n' +
+      'end_header\n';
+    const body = outPts.map(p =>
+      p[0].toFixed(5) + ' ' + p[1].toFixed(5) + ' ' + p[2].toFixed(5) + ' ' +
+      Math.round(p[3]*255) + ' ' + Math.round(p[4]*255) + ' ' + Math.round(p[5]*255)
+    ).join('\n');
+    _downloadBlob(new Blob([header + body], { type: 'text/plain' }), base + '.ply');
+  } else {
+    // DXF simple: entitats POINT al pla XY (DXF Y = three.js -Z, DXF X = three.js X)
+    const lines = ['0', 'SECTION', '2', 'ENTITIES'];
+    for (const p of outPts) {
+      lines.push('0', 'POINT', '8', 'SECCIO', '10', p[0].toFixed(5), '20', (-p[2]).toFixed(5), '30', '0.0');
+    }
+    lines.push('0', 'ENDSEC', '0', 'EOF');
+    _downloadBlob(new Blob([lines.join('\n')], { type: 'application/dxf' }), base + '.dxf');
+  }
+  diag('secció exportada: ' + outPts.length + ' punts (' + format + ')');
+}
+
+function _downloadBlob(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
 function removeClipBox() {
@@ -1600,8 +1711,57 @@ function cancelAlign() {
 }
 
 function clearAlignMarkers() {
-  alignMarkers.forEach(m => { scene.remove(m); m.geometry.dispose(); m.material.dispose(); });
+  alignMarkers.forEach(m => {
+    scene.remove(m);
+    if (m.geometry) m.geometry.dispose();
+    if (m.material) {
+      if (m.material.map) m.material.map.dispose();
+      m.material.dispose();
+    }
+  });
   alignMarkers = [];
+}
+
+// Crea un sprite numerat (1/2/3…) com a etiqueta per al marcador d'alineació.
+function _makeAlignLabelSprite(n, bgColor) {
+  const size = 64;
+  const cv = document.createElement('canvas'); cv.width = cv.height = size;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = bgColor;
+  ctx.beginPath(); ctx.arc(size/2, size/2, size/2 - 2, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.stroke();
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 42px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(String(n), size/2, size/2 + 2);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.needsUpdate = true;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+  sp.renderOrder = 10000;
+  return sp;
+}
+
+// Treu l'últim marcador posat (i el punt associat) sense cancel·lar la sessió.
+function alignUndoLast() {
+  if (!alignMode) return;
+  // Prioritat: si estem posant tgt i n'hi ha, treu el darrer tgt. Si no, treu src.
+  if (alignPhase === 'tgt' && alignTgtPts.length > 0) {
+    alignTgtPts.pop();
+    _popAlignMarker(2);   // treu els 2 últims objectes (esfera + sprite)
+  } else if (alignSrcPts.length > 0) {
+    alignSrcPts.pop();
+    _popAlignMarker(2);
+    if (alignPhase === 'tgt' && alignSrcPts.length < alignMode) alignPhase = 'src';
+  } else {
+    return;
+  }
+  updateAlignBadge();
+}
+function _popAlignMarker(count) {
+  for (let i = 0; i < count && alignMarkers.length; i++) {
+    const m = alignMarkers.pop();
+    scene.remove(m);
+    if (m.geometry) m.geometry.dispose();
+    if (m.material) { if (m.material.map) m.material.map.dispose(); m.material.dispose(); }
+  }
 }
 
 function updateAlignBadge() {
@@ -1645,11 +1805,16 @@ function handleAlignClick(pWorld, cloud) {
       return;
     }
     const m = new THREE.Mesh(
-      new THREE.SphereGeometry(markerR * 2, 8, 8),
-      new THREE.MeshBasicMaterial({ color: 0xff4400, depthTest: false })
+      new THREE.SphereGeometry(markerR * 2, 12, 12),
+      new THREE.MeshBasicMaterial({ color: 0xee2222, depthTest: false })
     );
     m.position.copy(pWorld);
+    m.renderOrder = 9999;
     scene.add(m); alignMarkers.push(m);
+    const lbl = _makeAlignLabelSprite(alignSrcPts.length + 1, '#ee2222');
+    lbl.position.copy(pWorld); lbl.position.y += markerR * 4;
+    lbl.scale.setScalar(markerR * 6);
+    scene.add(lbl); alignMarkers.push(lbl);
     alignSrcPts.push(pWorld.clone());
     if (alignSrcPts.length === alignMode) alignPhase = 'tgt';
     updateAlignBadge();
@@ -1667,14 +1832,20 @@ function handleAlignClick(pWorld, cloud) {
     return;
   }
   const isDxf = !cloud;
+  const tgtColor = isDxf ? 0x00ccff : 0x2277ee;   // cian si ve del DXF, blau si és núvol
   const m = new THREE.Mesh(
-    new THREE.SphereGeometry(markerR * 2, 8, 8),
-    new THREE.MeshBasicMaterial({ color: isDxf ? 0x00ccff : 0x00cc44, depthTest: false }),   // cian si ve del DXF, verd si és núvol
+    new THREE.SphereGeometry(markerR * 2, 12, 12),
+    new THREE.MeshBasicMaterial({ color: tgtColor, depthTest: false }),
   );
   m.position.copy(pWorld);
+  m.renderOrder = 9999;
   scene.add(m); alignMarkers.push(m);
+  const lbl = _makeAlignLabelSprite(alignTgtPts.length + 1, isDxf ? '#00ccff' : '#2277ee');
+  lbl.position.copy(pWorld); lbl.position.y += markerR * 4;
+  lbl.scale.setScalar(markerR * 6);
+  scene.add(lbl); alignMarkers.push(lbl);
   alignTgtPts.push(pWorld.clone());
-  if (!alignTgtCloud) alignTgtCloud = cloud;   // pot quedar null si tots els tgt són del DXF (refineAlignByColor ho ignorarà)
+  if (!alignTgtCloud) alignTgtCloud = cloud;
 
   if (alignTgtPts.length === alignMode) {
     // captura referències abans que cancelAlign() netegi l'estat
@@ -4887,10 +5058,52 @@ function setupUI() {
   // ── Exportar secció DXF ──
   document.getElementById('btnExportSection').onclick = exportClipSectionDXF;
 
+  // ── Secció horitzontal (sliders) ──
+  const hSlabTop = document.getElementById('hSlabTop');
+  const hSlabBot = document.getElementById('hSlabBot');
+  const hSlabTopVal = document.getElementById('hSlabTopVal');
+  const hSlabBotVal = document.getElementById('hSlabBotVal');
+  const refreshSlabLabels = () => {
+    const r = _globalYRange();
+    if (!r) { if (hSlabTopVal) hSlabTopVal.textContent = '—'; if (hSlabBotVal) hSlabBotVal.textContent = '—'; return; }
+    const { topY, botY } = _hSlabYs();
+    if (hSlabTopVal) hSlabTopVal.textContent = window._hSlabTopPct > 0 ? topY.toFixed(2) + ' m' : 'off';
+    if (hSlabBotVal) hSlabBotVal.textContent = window._hSlabBotPct > 0 ? botY.toFixed(2) + ' m' : 'off';
+  };
+  const slabChanged = () => {
+    window._hSlabTopPct = hSlabTop ? +hSlabTop.value : 0;
+    window._hSlabBotPct = hSlabBot ? +hSlabBot.value : 0;
+    updateClipPlanes();
+    refreshSlabLabels();
+  };
+  if (hSlabTop) hSlabTop.addEventListener('input', slabChanged);
+  if (hSlabBot) hSlabBot.addEventListener('input', slabChanged);
+  document.getElementById('hSlabReset')?.addEventListener('click', () => {
+    if (hSlabTop) hSlabTop.value = 0;
+    if (hSlabBot) hSlabBot.value = 0;
+    window._hSlabTopPct = 0; window._hSlabBotPct = 0;
+    updateClipPlanes();
+    refreshSlabLabels();
+  });
+  document.getElementById('hSlabExport')?.addEventListener('click', () => {
+    if (window._hSlabTopPct === 0 && window._hSlabBotPct === 0) {
+      alert('No hi ha cap llesca activa. Ajusta els sliders Pla superior o Pla inferior primer.');
+      return;
+    }
+    const fmt = prompt('Format d\'exportació:\n- "ply" per núvol 3D amb color\n- "dxf" per punts al pla', 'ply');
+    if (!fmt) return;
+    const f = fmt.trim().toLowerCase();
+    if (f !== 'ply' && f !== 'dxf') { alert('Format no vàlid. Fes servir "ply" o "dxf".'); return; }
+    _exportHSlab(f);
+  });
+  // Primera etiqueta
+  setTimeout(refreshSlabLabels, 100);
+
   // ── Alineació ──
   // Alinear 2 punts eliminat a v3 — es manté la lògica de startAlign per si cal reactivar-la.
   const _align2 = document.getElementById('align2pt'); if (_align2) _align2.onclick = () => startAlign(2);
   const _align3 = document.getElementById('align3pt'); if (_align3) _align3.onclick = () => startAlign(3);
+  const _alignUndo = document.getElementById('alignUndoPt'); if (_alignUndo) _alignUndo.onclick = () => alignUndoLast();
 
   // ── Auto-align per color ──
   let _autoAlignPending = null;
@@ -5208,6 +5421,15 @@ function setupUI() {
     clearAllMeasurements();
     updateMeasureList();
   };
+
+  // Equivalents dins el nou acordió "Mesures i Cotes" al panell NÚVOL.
+  document.getElementById('cotesMeasure')?.addEventListener('click', () => {
+    document.getElementById('toggleMeasure')?.click();
+  });
+  document.getElementById('cotesClear')?.addEventListener('click', () => {
+    clearAllMeasurements();
+    updateMeasureList();
+  });
 
   // ── Unir (a l'escena) / Descarregar ──
   document.getElementById('mergeScene').onclick = () => { mergeCloudsInScene(); };
@@ -5733,17 +5955,40 @@ function handleMeasureClick(pWorld) {
     const dy = p2.y - p1.y;
     const dz = p2.z - p1.z;
 
+    // Grup amb línia principal + petites marques auxiliars perpendiculars als
+    // extrems (estil CAD). La línia és fina (sense depthTest perquè es vegi
+    // sobre el núvol) i les marques tenen una llargada proporcional a la
+    // mida del marcador perquè siguin visibles independent de l'escala.
+    const dim = new THREE.Group();
+    const lineMat = new THREE.LineBasicMaterial({ color: 0xffcc00, depthTest: false, transparent: true, opacity: 0.95 });
     const lineGeom = new THREE.BufferGeometry().setFromPoints([p1, p2]);
-    const lineMat  = new THREE.LineBasicMaterial({ color: 0x00ff88, linewidth: 2 });
-    const line     = new THREE.Line(lineGeom, lineMat);
-    scene.add(line);
+    const line = new THREE.Line(lineGeom, lineMat);
+    line.renderOrder = 9998;
+    dim.add(line);
+    // Direcció de la mesura + vector perpendicular arbitrari (al pla XZ si és horitzontal)
+    const dir = p2.clone().sub(p1).normalize();
+    let perp = new THREE.Vector3(0, 1, 0).cross(dir);
+    if (perp.lengthSq() < 1e-6) perp = new THREE.Vector3(1, 0, 0).cross(dir);
+    perp.normalize();
+    const tickLen = markerR * 2.5;
+    const mkTick = (center) => {
+      const a = center.clone().addScaledVector(perp, tickLen);
+      const b = center.clone().addScaledVector(perp, -tickLen);
+      const g = new THREE.BufferGeometry().setFromPoints([a, b]);
+      const l = new THREE.Line(g, lineMat);
+      l.renderOrder = 9998;
+      return l;
+    };
+    dim.add(mkTick(p1));
+    dim.add(mkTick(p2));
+    scene.add(dim);
 
     const mid    = p1.clone().add(p2).multiplyScalar(0.5);
     const label  = createLabelSprite(`${dist.toFixed(3)} m`, markerR);
     label.position.copy(mid);
     scene.add(label);
 
-    measurements.push({ p1, p2, dx, dy, dz, dist, line, markers: [...currentMeasureMarkers], label });
+    measurements.push({ p1, p2, dx, dy, dz, dist, line: dim, markers: [...currentMeasureMarkers], label });
 
     currentMeasurePoints  = [];
     currentMeasureMarkers = [];
@@ -5757,38 +6002,77 @@ function clearCurrentMeasure() {
   currentMeasurePoints  = [];
 }
 
-function clearAllMeasurements() {
-  for (const m of measurements) {
-    if (m.line)  { scene.remove(m.line);  m.line.geometry.dispose();  m.line.material.dispose(); }
-    if (m.label) { scene.remove(m.label); m.label.material.map?.dispose(); m.label.material.dispose(); }
-    for (const mk of m.markers ?? []) { scene.remove(mk); mk.geometry.dispose(); mk.material.dispose(); }
+function _disposeMeasurement(m) {
+  if (!m) return;
+  if (m.line) {
+    scene.remove(m.line);
+    m.line.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); }
+    });
   }
+  if (m.label) { scene.remove(m.label); m.label.material?.map?.dispose(); m.label.material?.dispose(); }
+  for (const mk of m.markers ?? []) {
+    scene.remove(mk);
+    if (mk.geometry) mk.geometry.dispose();
+    if (mk.material) mk.material.dispose();
+  }
+}
+
+function removeMeasurementAt(i) {
+  if (i < 0 || i >= measurements.length) return;
+  _disposeMeasurement(measurements[i]);
+  measurements.splice(i, 1);
+  updateMeasureList();
+}
+
+function clearAllMeasurements() {
+  for (const m of measurements) _disposeMeasurement(m);
   measurements = [];
   clearCurrentMeasure();
 }
 
 function updateMeasureList() {
   const div = document.getElementById('measureList');
-  if (!div) return;
-
-  if (!measuring && measurements.length === 0) {
-    div.style.display = 'none';
-    div.textContent = '';
-    return;
+  if (div) {
+    if (!measuring && measurements.length === 0) {
+      div.style.display = 'none';
+      div.textContent = '';
+    } else {
+      div.style.display = 'block';
+      let txt = measuring ? 'MODE MESURA ACTIU\n' : 'Mides guardades:\n';
+      if (measurements.length === 0) {
+        txt += '(cap mida)';
+      } else {
+        measurements.forEach((m, i) => {
+          txt += `#${i + 1}: ${m.dist.toFixed(3)} m  `
+               + `ΔX=${m.dx.toFixed(3)}  ΔY=${m.dy.toFixed(3)}  ΔZ=${m.dz.toFixed(3)}\n`;
+        });
+      }
+      div.textContent = txt;
+    }
   }
 
-  div.style.display = 'block';
-  let txt = measuring ? 'MODE MESURA ACTIU\n' : 'Mides guardades:\n';
-
-  if (measurements.length === 0) {
-    txt += '(cap mida)';
-  } else {
-    measurements.forEach((m, i) => {
-      txt += `#${i + 1}: ${m.dist.toFixed(3)} m  `
-           + `ΔX=${m.dx.toFixed(3)}  ΔY=${m.dy.toFixed(3)}  ΔZ=${m.dz.toFixed(3)}\n`;
-    });
+  // Nova llista interactiva al panell NÚVOL (acordió Mesures i Cotes)
+  const cotes = document.getElementById('cotesList');
+  if (cotes) {
+    cotes.innerHTML = '';
+    if (measurements.length === 0) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'color:#556;font-style:italic;padding:4px 2px';
+      empty.textContent = measuring ? 'Mode mesura actiu — clica 2 punts al núvol.' : 'Cap mesura.';
+      cotes.appendChild(empty);
+    } else {
+      measurements.forEach((m, i) => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:4px 6px;border-bottom:1px solid #262b38;cursor:pointer';
+        row.innerHTML = `<span>#${i + 1}  <b style="color:#9cf">${m.dist.toFixed(3)} m</b></span><span style="color:#f66;font-weight:700">&#10006;</span>`;
+        row.title = `ΔX=${m.dx.toFixed(3)}  ΔY=${m.dy.toFixed(3)}  ΔZ=${m.dz.toFixed(3)}  — clica per esborrar`;
+        row.onclick = () => removeMeasurementAt(i);
+        cotes.appendChild(row);
+      });
+    }
   }
-  div.textContent = txt;
 }
 
 function createLabelSprite(text, markerR = 0.05) {
@@ -8396,8 +8680,8 @@ window.addEventListener('pagehide', () => { try { persistSession(true); } catch(
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { try { persistSession(true); } catch(_) {} } });
 animate();
 
-// Obre els accordions "Propietats" i "Moure/Rotar" per defecte
-['accMove', 'accAlign'].forEach(id => {
+// Obre els accordions "Propietats" i "Alinear" per defecte
+['accProps', 'accAlign'].forEach(id => {
   const body   = document.getElementById(id + '-body');
   const header = document.querySelector('[data-acc="' + id + '"]');
   if (body)   body.classList.add('open');

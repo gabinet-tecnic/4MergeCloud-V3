@@ -742,26 +742,14 @@
         <div id="cloudListPanel"></div>
       </div>
 
-      <!-- PROPIETATS -->
+      <!-- PROPIETATS (inclou Moure/Rotar, Transformació Numèrica i Escalat Uniforme) -->
       <div class="acc">
         <div class="acc-header" data-acc="accProps">
           <span><span class="acc-icon">&#9776;</span>Propietats</span>
           <span class="acc-arrow">&#9654;</span>
         </div>
         <div class="acc-body" id="accProps-body">
-          <div id="propsContent" style="font-size:11px;color:#556;line-height:1.7">
-            Cap núvol carregat. Comença carregant un fitxer PLY o XYZ.
-          </div>
-        </div>
-      </div>
-
-      <!-- MOURE / ROTAR -->
-      <div class="acc">
-        <div class="acc-header" data-acc="accMove">
-          <span><span class="acc-icon">&#10010;</span>Moure Núvol / Rotar Núvol</span>
-          <span class="acc-arrow">&#9654;</span>
-        </div>
-        <div class="acc-body" id="accMove-body">
+          <div id="propsContent" style="font-size:11px;color:#556;line-height:1.5;margin-bottom:8px"></div>
           <div class="btn-row">
             <button id="modeTranslate">&#8596; Moure Núvol</button>
             <button id="modeRotate">&#8635; Rotar Núvol</button>
@@ -809,6 +797,28 @@
           <button id="applyClipBox" class="btn-green" style="margin-top:3px">&#9984; Aplicar Tall (Definitiu)</button>
           <button id="removeClipBox" class="btn-red" style="margin-top:3px">&#10005; Eliminar Caixa</button>
           <button id="btnExportSection" style="margin-top:3px">&#8659; Exportar Secció DXF</button>
+
+          <!-- Secció horitzontal per scroll — talls en viu per visualitzar llesques -->
+          <div style="margin-top:10px;border-top:1px solid #262b38;padding-top:10px">
+            <div style="font-size:10px;font-weight:700;color:#889;margin-bottom:6px;letter-spacing:0.4px">SECCIÓ HORITZONTAL (SCROLL)</div>
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+              <span style="font-size:10px;color:#aab;min-width:70px">Pla superior</span>
+              <input type="range" id="hSlabTop" min="0" max="100" step="0.1" value="0" style="flex:1">
+              <span id="hSlabTopVal" style="font-size:10px;color:#9cf;min-width:60px;text-align:right">—</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+              <span style="font-size:10px;color:#aab;min-width:70px">Pla inferior</span>
+              <input type="range" id="hSlabBot" min="0" max="100" step="0.1" value="0" style="flex:1">
+              <span id="hSlabBotVal" style="font-size:10px;color:#9cf;min-width:60px;text-align:right">—</span>
+            </div>
+            <div class="btn-row">
+              <button id="hSlabReset" style="flex:1">&#8634; Reset</button>
+              <button id="hSlabExport" class="btn-green" style="flex:1">&#8659; Exportar secció</button>
+            </div>
+            <div style="font-size:10px;color:#667;margin-top:4px;line-height:1.3">
+              Arrossega els sliders per veure la llesca horitzontal. Pla superior retalla des de dalt cap avall, pla inferior des de baix cap amunt. Exporta la llesca com a PLY o DXF.
+            </div>
+          </div>
         </div>
       </div>
 
@@ -821,6 +831,7 @@
         <div class="acc-body" id="accAlign-body">
           <div class="btn-row">
             <button id="align3pt">&#9679;&#9679;&#9679; Alinear 3 punts</button>
+            <button id="alignUndoPt">&#8617; Desfer últim punt</button>
           </div>
           <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#889;margin-top:6px;cursor:pointer;user-select:none;">
             <input type="checkbox" id="alignRefineColor" style="cursor:pointer;">
@@ -934,6 +945,24 @@
           <input type="file" id="dxfInput" multiple accept=".dxf">
           <div id="dxfListPanel"></div>
           <button id="dxfRemoveAll" style="margin-top:4px;width:100%;background:#2a1d1d;border:1px solid #553030;color:#f99;font-size:11px;padding:7px 10px;border-radius:5px;cursor:pointer">&#10006; Treure DXF carregat</button>
+        </div>
+      </div>
+
+      <!-- MESURES I COTES -->
+      <div class="acc">
+        <div class="acc-header" data-acc="accCotes">
+          <span><span class="acc-icon">&#128207;</span>Mesures i Cotes</span>
+          <span class="acc-arrow">&#9654;</span>
+        </div>
+        <div class="acc-body" id="accCotes-body">
+          <div class="btn-row">
+            <button id="cotesMeasure">&#128207; Mesura</button>
+            <button id="cotesClear" class="btn-red">&#128465; Esborrar totes</button>
+          </div>
+          <div id="cotesList" style="margin-top:6px;font-size:11px;color:#aab"></div>
+          <div style="font-size:10px;color:#667;margin-top:4px;line-height:1.3">
+            Clica Mesura, selecciona dos punts al núvol. Fes clic sobre un ítem per esborrar-lo individualment.
+          </div>
         </div>
       </div>
 
@@ -1302,7 +1331,7 @@
   <script src="https://apis.google.com/js/api.js" async defer></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="drive.js"></script>
-  <script type="module" src="main.js?v=v3-2026102301"></script>
+  <script type="module" src="main.js?v=v3-2026102401"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
