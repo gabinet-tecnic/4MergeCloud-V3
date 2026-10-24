@@ -2,7 +2,7 @@
 import * as THREE from './three/three.module.js';
 import { OrbitControls } from './jsm/controls/OrbitControls.js';
 import { TransformControls } from './jsm/controls/TransformControls.js';
-import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
+import { loadPLY, loadXYZ, loadLAS } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
 const APP_VERSION = '3.0.0-dev';
@@ -4971,7 +4971,7 @@ function setupUI() {
   fileInput.value = '';
   let _loading = false;
 
-  const CLOUD_EXTS = ['ply', 'xyz', 'txt', 'obj', 'glb', 'gltf', 'fbx'];
+  const CLOUD_EXTS = ['ply', 'xyz', 'txt', 'obj', 'glb', 'gltf', 'fbx', 'las', 'laz'];
 
   // Signatura del darrer conjunt de fitxers processat, per rebutjar duplicats
   // consecutius (l'iPad Safari a vegades dispara 'change' més d'una vegada).
@@ -5031,6 +5031,7 @@ function setupUI() {
           else if (ext === 'obj')                cloud = await loadOBJ(file, companions);
           else if (ext === 'glb' || ext === 'gltf') cloud = await loadGLB(file, companions);
           else if (ext === 'fbx')                cloud = await loadFBX(file);
+          else if (ext === 'las' || ext === 'laz') cloud = await loadLAS(file);
           else { alert(T.unsupported(ext)); continue; }
         } catch (err) {
           console.error('Error carregant núvol:', err);

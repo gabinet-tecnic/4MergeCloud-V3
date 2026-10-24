@@ -638,7 +638,7 @@
       <span id="tbTitle">4 Merge Cloud</span>
       <span id="appVersion"></span>
     </span>
-    <button id="tbOpen" class="tb-btn" title="Obrir fitxers o una carpeta (XYZ/PLY/OBJ/GLB/FBX o un projecte .4mc)">Obrir</button>
+    <button id="tbOpen" class="tb-btn" title="Obrir fitxers o una carpeta (XYZ/PLY/OBJ/GLB/FBX/LAS o un projecte .4mc)">Obrir</button>
     <button id="tbLibrary" class="tb-btn" title="Obrir la biblioteca d'escàners guardats al Google Drive">📁 Biblioteca</button>
     <button id="tbDrive" class="tb-btn" title="Obrir un fitxer del teu Google Drive">Drive</button>
     <button id="tbDriveSave" class="tb-btn" title="Desar el projecte actual (.4mc) a una carpeta del teu Google Drive">Desar a Drive</button>
@@ -725,10 +725,10 @@
             <path d="M14 4v14M8 10l6-6 6 6"/>
             <rect x="3" y="18" width="22" height="6" rx="2" stroke-opacity="0.4"/>
           </svg>
-          <div class="load-title">Carregar Fitxer (XYZ/PLY/OBJ/GLB/FBX)</div>
+          <div class="load-title">Carregar Fitxer (XYZ/PLY/OBJ/GLB/FBX/LAS)</div>
           <div class="load-sub">ARROSSEGA FITXERS O UNA CARPETA AQUÍ</div>
         </label>
-        <input type="file" id="fileInput" multiple accept=".xyz,.ply,.txt,.obj,.glb,.gltf,.fbx,.4mc,text/plain,application/octet-stream,model/gltf-binary,model/obj">
+        <input type="file" id="fileInput" multiple accept=".xyz,.ply,.txt,.obj,.glb,.gltf,.fbx,.las,.laz,.4mc,text/plain,application/octet-stream,model/gltf-binary,model/obj">
         <input type="file" id="dirInput" webkitdirectory directory style="display:none">
         <div style="margin-top:8px;font-size:10px;color:#667;text-align:center;line-height:1.5">
           OBJ amb textura? <label for="dirInput" style="color:#e07820;cursor:pointer;text-decoration:underline">Carrega la carpeta sencera</label>
@@ -1362,7 +1362,7 @@
   <script src="https://apis.google.com/js/api.js" async defer></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="drive.js"></script>
-  <script type="module" src="main.js?v=v3-2026102402"></script>
+  <script type="module" src="main.js?v=v3-2026102403"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
