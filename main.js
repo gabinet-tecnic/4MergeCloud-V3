@@ -1416,6 +1416,154 @@ function _downloadBlob(blob, name) {
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
+// ── Ortoimatge ─────────────────────────────────────────────────────────────
+// Captura la vista ortogonal actual com una imatge rasteritzada a una resolució
+// controlada (px/m). Genera: PNG + world file (.pgw) + sidecar .txt amb els
+// límits mundials i la vista. Si la vista no és ortogonal, demana activar-la.
+
+const ORTHO_VIEW_DEFS = {
+  PL: { label: 'Planta',    dir: [0,  1, 0], up: [0, 0, -1] },
+  SO: { label: 'Sostre',    dir: [0, -1, 0], up: [0, 0,  1] },
+  FR: { label: 'Front',     dir: [0, 0,  1], up: [0, 1,  0] },
+  PO: { label: 'Posterior', dir: [0, 0, -1], up: [0, 1,  0] },
+  LD: { label: 'Dret',      dir: [1, 0,  0], up: [0, 1,  0] },
+  LE: { label: 'Esquerre',  dir:[-1, 0,  0], up: [0, 1,  0] },
+};
+
+function _orthoSetViewByCode(code) {
+  const def = ORTHO_VIEW_DEFS[code];
+  if (!def) return;
+  setOrthoView(new THREE.Vector3(...def.dir), new THREE.Vector3(...def.up));
+  _orthoRefreshFrameInfo();
+}
+
+function _orthoRefreshFrameInfo() {
+  const info = document.getElementById('orthoFrameInfo');
+  if (!info) return;
+  if (!useOrtho || !orthoCamera) { info.textContent = 'Vista no ortogonal — tria una vista.'; return; }
+  const widthW  = (orthoCamera.right - orthoCamera.left) / orthoCamera.zoom;
+  const heightW = (orthoCamera.top   - orthoCamera.bottom) / orthoCamera.zoom;
+  const pxm = +(document.getElementById('orthoPxPerM')?.value || 200);
+  info.textContent = 'Marc: ' + widthW.toFixed(2) + ' × ' + heightW.toFixed(2) + ' m — ' +
+                     Math.round(widthW * pxm) + ' × ' + Math.round(heightW * pxm) + ' px';
+}
+
+// Captura. Fa fallback a 'image/png' per preservar transparència/sense pèrdua.
+function _orthoCapture() {
+  if (!useOrtho || !orthoCamera) {
+    alert('Primer tria una vista ortogonal (Planta, Front, etc.).');
+    return;
+  }
+  const pxm = Math.max(10, Math.min(2000, +(document.getElementById('orthoPxPerM')?.value || 200)));
+  // Dimensions mundials del frustum visible (tenint en compte zoom)
+  const widthW  = (orthoCamera.right - orthoCamera.left) / orthoCamera.zoom;
+  const heightW = (orthoCamera.top   - orthoCamera.bottom) / orthoCamera.zoom;
+  const imgW = Math.max(32, Math.round(widthW  * pxm));
+  const imgH = Math.max(32, Math.round(heightW * pxm));
+  const maxSide = 8192;   // cap als 8K per no bloquejar la GPU
+  if (imgW > maxSide || imgH > maxSide) {
+    alert('Resolució massa gran (' + imgW + '×' + imgH + ' px, màxim ' + maxSide + '). Baixa la densitat px/m.');
+    return;
+  }
+
+  const prevSize = renderer.getSize(new THREE.Vector2());
+  const prevPR = renderer.getPixelRatio();
+  // Fons transparent per si l'usuari vol compositar
+  const prevClearAlpha = renderer.getClearAlpha();
+  const prevClearColor = new THREE.Color(); renderer.getClearColor(prevClearColor);
+
+  let dataURL = null;
+  try {
+    renderer.setPixelRatio(1);
+    renderer.setSize(imgW, imgH, false);
+    renderer.setClearColor(0x000000, 0);
+    renderer.render(scene, orthoCamera);
+    dataURL = renderer.domElement.toDataURL('image/png');
+  } finally {
+    renderer.setPixelRatio(prevPR);
+    renderer.setSize(prevSize.x, prevSize.y, false);
+    renderer.setClearColor(prevClearColor, prevClearAlpha);
+    renderer.render(scene, (useOrtho && orthoCamera) ? orthoCamera : camera);
+  }
+  if (!dataURL) { alert('No s\'ha pogut capturar la imatge.'); return; }
+
+  // Calcular world file (.pgw) — mapa pixel → coord mundial dels dos eixos
+  // visibles. Per cada vista triem quin parell (worldX, worldY) correspon a
+  // (image X, image Y). pxSize és widthW/imgW pels dos eixos (quadrat).
+  const pxSizeX = widthW / imgW;
+  const pxSizeY = heightW / imgH;
+  // Centre del píxel superior-esquerre en coordenades locals de la càmera:
+  // U (horitzontal, dreta positiva) = -widthW/2 + pxSizeX/2
+  // V (vertical, amunt positiu)    =  heightW/2 - pxSizeY/2
+  const camPos = orthoCamera.position.clone();
+  // Vectors "u" i "v" en coords món a partir dels eixos de la càmera
+  const camRight = new THREE.Vector3(1, 0, 0).applyQuaternion(orthoCamera.quaternion);
+  const camUp    = new THREE.Vector3(0, 1, 0).applyQuaternion(orthoCamera.quaternion);
+  const camFwd   = new THREE.Vector3(0, 0, -1).applyQuaternion(orthoCamera.quaternion);
+  // Punt al pla d'imatge (centre pla a camPos + camFwd * near, però és ortogonal:
+  // el pla imatge passa pel target). Fem servir el target de controls.
+  const target = orthoControls && orthoControls.target
+    ? orthoControls.target.clone()
+    : camPos.clone().addScaledVector(camFwd, 0);
+  const tl3D = target.clone()
+    .addScaledVector(camRight, -widthW/2 + pxSizeX/2)
+    .addScaledVector(camUp,     heightW/2 - pxSizeY/2);
+  // Per georeferència 2D cal reduir a 2 eixos. Prenem la vista:
+  const dir = new THREE.Vector3(); orthoCamera.getWorldDirection(dir);
+  const absD = { x: Math.abs(dir.x), y: Math.abs(dir.y), z: Math.abs(dir.z) };
+  let axH, axV, viewLabel, invertV = false;
+  if (absD.y > absD.x && absD.y > absD.z) {
+    // Planta o Sostre: eix mundial = X horitzontal, Z vertical (amb signe)
+    axH = 'x'; axV = 'z'; viewLabel = dir.y < 0 ? 'PLANTA (vista des de dalt)' : 'SOSTRE (vista des de baix)';
+    // Per planta: V creix cap a +Y de càmera, que és -Z món (si up=-Z). Usem camUp.z com a signe.
+  } else if (absD.x > absD.z) {
+    axH = 'z'; axV = 'y'; viewLabel = dir.x > 0 ? 'LATERAL ESQUERRE (vista des del dret)' : 'LATERAL DRET (vista des de l\'esquerre)';
+  } else {
+    axH = 'x'; axV = 'y'; viewLabel = dir.z > 0 ? 'POSTERIOR' : 'FRONTAL';
+  }
+
+  // Signes dels eixos: pxSizeHoriz/World és la projecció unitària de camRight,
+  // pxSizeVert/World la projecció de -camUp (imatge Y creix cap avall → món en direcció -camUp).
+  const stepHWorld = camRight[axH] * pxSizeX;    // metres / pixel al llarg d'axH
+  const stepVWorld = -camUp[axV]  * pxSizeY;     // metres / pixel al llarg d'axV (sign ja inclou el "cap avall")
+  const upperLeftH = tl3D[axH];
+  const upperLeftV = tl3D[axV];
+
+  // World file: A/D/B/E/C/F  (A=stepH, D=rotació, B=rotació, E=stepV, C=upperLeftH, F=upperLeftV)
+  const wld = [
+    stepHWorld.toExponential(10),
+    (0).toExponential(10),
+    (0).toExponential(10),
+    stepVWorld.toExponential(10),
+    upperLeftH.toExponential(10),
+    upperLeftV.toExponential(10),
+  ].join('\n') + '\n';
+
+  const sidecar =
+    '4 Merge Cloud — Ortoimatge\n' +
+    'Vista: ' + viewLabel + '\n' +
+    'Resolució: ' + pxm + ' px/m\n' +
+    'Imatge: ' + imgW + ' × ' + imgH + ' px\n' +
+    'Marc món: ' + widthW.toFixed(4) + ' × ' + heightW.toFixed(4) + ' m\n' +
+    'Eixos imatge → món: X=' + axH.toUpperCase() + '  Y=' + axV.toUpperCase() + '\n' +
+    'Mida de píxel: ' + stepHWorld.toFixed(6) + ' (horitz)  ' + stepVWorld.toFixed(6) + ' (vert)\n' +
+    'Cantonada superior-esquerra (món): ' + axH.toUpperCase() + '=' + upperLeftH.toFixed(4) + '  ' + axV.toUpperCase() + '=' + upperLeftV.toFixed(4) + '\n' +
+    'Càmera posició: (' + camPos.x.toFixed(4) + ', ' + camPos.y.toFixed(4) + ', ' + camPos.z.toFixed(4) + ')\n' +
+    'Càmera direcció: (' + dir.x.toFixed(4) + ', ' + dir.y.toFixed(4) + ', ' + dir.z.toFixed(4) + ')\n' +
+    'Exportat: ' + new Date().toISOString() + '\n';
+
+  const base = 'ortho_' + viewLabel.split(' ')[0].toLowerCase() + '_' + new Date().toISOString().slice(0, 10);
+
+  // PNG
+  fetch(dataURL).then(r => r.blob()).then(blob => {
+    _downloadBlob(blob, base + '.png');
+    _downloadBlob(new Blob([wld], { type: 'text/plain' }), base + '.pgw');
+    _downloadBlob(new Blob([wld], { type: 'text/plain' }), base + '.wld');   // alias per compatibilitat GIS
+    _downloadBlob(new Blob([sidecar], { type: 'text/plain' }), base + '.txt');
+  });
+  diag('ortoimatge capturada: ' + viewLabel + ' · ' + imgW + '×' + imgH + ' px');
+}
+
 function removeClipBox() {
   const { cloud, box } = _findClipBoxOwner();
   if (!cloud || !box) return;
@@ -5430,6 +5578,18 @@ function setupUI() {
     clearAllMeasurements();
     updateMeasureList();
   });
+
+  // ── Ortoimatge ──
+  document.querySelectorAll('[data-ortho-view]').forEach(btn => {
+    btn.addEventListener('click', () => _orthoSetViewByCode(btn.dataset.orthoView));
+  });
+  document.getElementById('orthoPxPerM')?.addEventListener('input', _orthoRefreshFrameInfo);
+  document.getElementById('orthoCapture')?.addEventListener('click', _orthoCapture);
+  // També refresca l'info quan es canvia la mida de la finestra o es pana/zoom
+  window.addEventListener('resize', _orthoRefreshFrameInfo);
+  if (typeof orthoControls !== 'undefined' && orthoControls) {
+    orthoControls.addEventListener('change', _orthoRefreshFrameInfo);
+  }
 
   // ── Unir (a l'escena) / Descarregar ──
   document.getElementById('mergeScene').onclick = () => { mergeCloudsInScene(); };
