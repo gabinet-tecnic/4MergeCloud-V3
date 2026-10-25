@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import {cutPath,distanceToSegment} from '../drawing-geometry.js';
+const line=[[-10,0],[10,0]];
+assert.deepEqual(cutPath(line,{kind:'circle',center:[0,0],radius:2}),[[[-10,0],[-2,0]],[[2,0],[10,0]]]);
+assert.deepEqual(cutPath(line,{kind:'rect',min:[-3,-1],max:[3,1]}),[[[-10,0],[-3,0]],[[3,0],[10,0]]]);
+assert.deepEqual(cutPath([[-1,0],[1,0]],{kind:'circle',center:[0,0],radius:2}),[]);
+assert.deepEqual(cutPath(line,{kind:'circle',center:[0,10],radius:2}),[line]);
+assert.deepEqual(cutPath([[-3,0],[0,0],[3,0]],{kind:'circle',center:[0,0],radius:1}),[[[-3,0],[-1,0]],[[1,0],[3,0]]]);
+assert.equal(distanceToSegment([5,3],[0,0],[10,0]).distance,3);
+console.log('PASS: exact circle/rectangle cuts, complete deletion, misses, multi-segment continuity and picking');
