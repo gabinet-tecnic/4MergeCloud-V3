@@ -1285,6 +1285,7 @@ function updateClipPlanes() {
   // només es marca needsUpdate quan canvia el NOMBRE de plans (activa/desactiva clipping).
   const hSlabActive = (window._hSlabTopPct > 0 || window._hSlabBotPct > 0);
   const hPlanes = hSlabActive ? _computeHSlabPlanes() : null;
+  const interiorOn = !!_interiorPlane;
   clouds.forEach(cloud => {
     const materials = [];
     if (cloud.material) materials.push(cloud.material);
@@ -1292,7 +1293,7 @@ function updateClipPlanes() {
       cloud.userData.meshView.traverse(o => { if (o.isMesh && o.material) materials.push(o.material); });
     }
     const box = cloud.userData.clipBox;
-    const needed = (box ? LOCAL_CLIP_PLANES.length : 0) + (hPlanes ? hPlanes.length : 0);
+    const needed = (box ? LOCAL_CLIP_PLANES.length : 0) + (hPlanes ? hPlanes.length : 0) + (interiorOn ? 1 : 0);
     for (const mat of materials) {
       if (needed === 0) {
         if (mat.clippingPlanes && mat.clippingPlanes.length) { mat.clippingPlanes = []; mat.needsUpdate = true; }
@@ -1311,6 +1312,9 @@ function updateClipPlanes() {
       }
       if (hPlanes) {
         for (let i = 0; i < hPlanes.length; i++) mat.clippingPlanes[idx++].copy(hPlanes[i]);
+      }
+      if (interiorOn) {
+        mat.clippingPlanes[idx++].copy(_interiorPlane);
       }
     }
   });
@@ -7856,8 +7860,9 @@ function initTopUI() {
   reopen?.addEventListener('click', () => setCollapsed(false));
 
   // Barra superior — accions globals
-  document.getElementById('tbOpen')?.addEventListener('click', () => document.getElementById('fileInput')?.click());
+  document.getElementById('tbOpen')?.addEventListener('click', () => _openDialog());
   document.getElementById('tbMerge')?.addEventListener('click', () => mergeCloudsInScene());
+  document.getElementById('qtMerge')?.addEventListener('click', () => mergeCloudsInScene());
   // Vista Interior / Tot: alterna entre BackSide (com Polycam, útil per escaneigs
   // d'habitacions tancades) i DoubleSide (segur per a qualsevol escaneig).
   // Per defecte "double" perquè molts escaneigs (peces, exteriors, superfícies primes)
@@ -7865,8 +7870,10 @@ function initTopUI() {
   window._meshSideMode = 'double';
   window._meshSide = () => window._meshSideMode === 'back' ? THREE.BackSide : THREE.DoubleSide;
   const _tbMeshSide = document.getElementById('tbMeshSide');
+  const _qtInterior = document.getElementById('qtInterior');
   function _applyMeshSideToAll() {
     const side = window._meshSide();
+    const isBack = window._meshSideMode === 'back';
     for (const c of clouds) {
       const mv = c.userData?.meshView;
       if (!mv) continue;
@@ -7877,25 +7884,265 @@ function initTopUI() {
         }
       });
     }
-    if (_tbMeshSide) _tbMeshSide.textContent = window._meshSideMode === 'back' ? 'Interior ✓' : 'Interior';
+    if (_tbMeshSide) _tbMeshSide.textContent = isBack ? 'Interior ✓' : 'Interior';
+    if (_qtInterior) _qtInterior.classList.toggle('active', isBack);
+    // En Interior, també oculta els punts "frontals" (els que miren a càmera i
+    // tapen la vista cap a dintre) via un pla de tall dinàmic davant la càmera.
+    _updateInteriorClip();
   }
-  _tbMeshSide?.addEventListener('click', () => {
+  const _interiorHandler = () => {
     window._meshSideMode = window._meshSideMode === 'back' ? 'double' : 'back';
     _applyMeshSideToAll();
-  });
+  };
+  _tbMeshSide?.addEventListener('click', _interiorHandler);
+  _qtInterior?.addEventListener('click', _interiorHandler);
   document.getElementById('tbDownload')?.addEventListener('click', () => document.getElementById('merge')?.click());
-  document.getElementById('tbUndo')?.addEventListener('click', () => {
+  const _undoHandler = () => {
     if (_ed2dActive && _ed2d) { _ed2d.undo(); }
     else { doUndo(); }
+  };
+  document.getElementById('tbUndo')?.addEventListener('click', _undoHandler);
+  document.getElementById('qtUndo')?.addEventListener('click', _undoHandler);
+  document.getElementById('tbSave')?.addEventListener('click', () => _saveDialog());
+}
+
+// ── Diàleg "Desar" unificat ────────────────────────────────────────────────
+// Pregunta format + destí (local / Google Drive). Formats estàndard només
+// desen el núvol de punts actiu com a fitxer; .4mc desa el projecte sencer
+// (núvols + dibuix + malla).
+async function _saveDialog() {
+  if (clouds.length === 0 && !(_ed2d && _ed2d.count().walls)) {
+    alert('No hi ha res per desar encara. Carrega un núvol o dibuixa una planta.');
+    return;
+  }
+  const html =
+    '<div style="padding:4px 2px 8px 2px;font-size:12px;color:#aab">Format:</div>' +
+    '<select id="_svFmt" style="width:100%;padding:7px;background:#1a2030;color:#eaf;border:1px solid #2a3050;border-radius:4px;font-size:12px;margin-bottom:12px">' +
+      '<option value="4mc">Projecte complet (.4mc) — tot (núvols + dibuix + malla)</option>' +
+      '<option value="ply">PLY — núvol actiu (estàndard)</option>' +
+      '<option value="xyz">XYZ — núvol actiu (text simple)</option>' +
+      '<option value="obj">OBJ — núvol actiu (sense color)</option>' +
+      '<option value="glb">GLB — núvol actiu (binari web)</option>' +
+      '<option value="las" disabled>LAS — exportació no implementada encara</option>' +
+    '</select>' +
+    '<div style="padding:4px 2px 8px 2px;font-size:12px;color:#aab">Destí:</div>' +
+    '<select id="_svDest" style="width:100%;padding:7px;background:#1a2030;color:#eaf;border:1px solid #2a3050;border-radius:4px;font-size:12px">' +
+      '<option value="local">Local (descarregar al disc)</option>' +
+      '<option value="drive">Google Drive (triar carpeta)</option>' +
+    '</select>';
+  const choice = await _modal('Desar', html, [
+    { id: '_svFmt', key: 'format' },
+    { id: '_svDest', key: 'dest' },
+  ]);
+  if (!choice) return;
+
+  if (choice.format === '4mc') {
+    if (choice.dest === 'drive') await _driveSaveProject();
+    else {
+      try { saveProject(); }
+      catch (e) { alert('No s\'ha pogut desar el projecte: ' + e.message); }
+    }
+    return;
+  }
+  // Formats estàndard: només el núvol seleccionat (o el primer)
+  const c = selectedCloud || clouds[0];
+  if (!c) { alert('No hi ha cap núvol per exportar.'); return; }
+  let blob, name;
+  try {
+    const base = (c.name || 'cloud').replace(/\.[^.]+$/, '');
+    if (choice.format === 'ply')      { blob = _cloudToPLY(c);  name = base + '.ply'; }
+    else if (choice.format === 'xyz') { blob = _cloudToXYZ(c);  name = base + '.xyz'; }
+    else if (choice.format === 'obj') { blob = _cloudToOBJ(c);  name = base + '.obj'; }
+    else if (choice.format === 'glb') { blob = await _cloudToGLB(c); name = base + '.glb'; }
+    else { alert('Format no suportat.'); return; }
+  } catch (e) { alert('Error exportant: ' + e.message); return; }
+  if (choice.dest === 'drive') await _driveUploadBlob(blob, name);
+  else _downloadBlob(blob, name);
+}
+
+async function _openDialog() {
+  const html =
+    '<div style="padding:4px 2px 10px 2px;font-size:12px;color:#aab">Des d\'on vols obrir?</div>' +
+    '<div style="display:flex;gap:8px"><button id="_opLocal" style="flex:1;padding:12px;background:#1a2030;border:1px solid #2a3050;color:#dde;border-radius:5px;cursor:pointer;font-size:12px">📂 Local<br><span style="font-size:10px;color:#889">Del teu ordinador</span></button>' +
+    '<button id="_opDrive" style="flex:1;padding:12px;background:#1a2030;border:1px solid #2a3050;color:#dde;border-radius:5px;cursor:pointer;font-size:12px">☁ Google Drive<br><span style="font-size:10px;color:#889">Picker de Drive</span></button></div>';
+  const wrap = _showModal('Obrir', html);
+  if (!wrap) return;
+  await new Promise(resolve => {
+    wrap.querySelector('#_opLocal').onclick = () => { _closeModal(wrap); document.getElementById('fileInput')?.click(); resolve(); };
+    wrap.querySelector('#_opDrive').onclick = () => { _closeModal(wrap); document.getElementById('tbDrive')?.click() || window.MCDrive?.openFromDrive?.(); resolve(); };
   });
-  document.getElementById('tbSave')?.addEventListener('click', () => {
-    try {
-      const n = saveProject();   // descarrega un fitxer de projecte .4mc (núvols + dibuix)
-      if (n === undefined) return;
-      const b = document.getElementById('tbSave');
-      if (b) { const t = b.textContent; b.textContent = '✓ Projecte desat'; setTimeout(() => { b.textContent = t; }, 1600); }
-    } catch (e) { diag('⚠ desar projecte ha fallat: ' + e.message); alert('No s\'ha pogut desar el projecte: ' + e.message); }
+}
+
+// ── Helpers de modal + exportació senzills ────────────────────────────────
+function _showModal(title, bodyHtml) {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:99999;display:flex;align-items:center;justify-content:center';
+  wrap.innerHTML =
+    '<div style="background:#0f1119;border:1px solid #2a2d40;border-radius:8px;padding:16px;min-width:320px;max-width:90vw;color:#eaf;font-family:sans-serif;box-shadow:0 10px 40px rgba(0,0,0,0.6)">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">' +
+        '<span style="font-weight:600;font-size:14px;color:#e0a15e">' + title + '</span>' +
+        '<button data-close style="background:none;border:none;color:#ccc;cursor:pointer;font-size:18px">✕</button>' +
+      '</div>' + bodyHtml + '</div>';
+  wrap.querySelector('[data-close]').onclick = () => _closeModal(wrap);
+  document.body.appendChild(wrap);
+  return wrap;
+}
+function _closeModal(wrap) { wrap?.remove(); }
+async function _modal(title, bodyHtml, fields) {
+  return new Promise(resolve => {
+    const wrap = _showModal(title, bodyHtml +
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">' +
+        '<button id="_mdlCancel" style="padding:7px 14px;background:#1a2030;border:1px solid #2a3050;color:#aab;border-radius:4px;cursor:pointer">Cancel·lar</button>' +
+        '<button id="_mdlOk" class="btn-orange" style="padding:7px 14px;background:#e07820;border:1px solid #ff9f45;color:#fff;border-radius:4px;cursor:pointer;font-weight:600">D\'acord</button>' +
+      '</div>');
+    wrap.querySelector('#_mdlCancel').onclick = () => { _closeModal(wrap); resolve(null); };
+    wrap.querySelector('#_mdlOk').onclick = () => {
+      const out = {};
+      for (const f of fields) out[f.key] = wrap.querySelector('#' + f.id).value;
+      _closeModal(wrap); resolve(out);
+    };
   });
+}
+
+// Exportació senzilla del núvol actiu a diversos formats estàndard
+function _cloudToXYZ(cloud) {
+  const pos = cloud.geometry.getAttribute('position');
+  const col = cloud.geometry.getAttribute('color');
+  cloud.updateMatrixWorld(true);
+  const mw = cloud.matrixWorld;
+  const v = new THREE.Vector3();
+  const parts = [];
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i).applyMatrix4(mw);
+    let line = v.x.toFixed(5) + ' ' + v.y.toFixed(5) + ' ' + v.z.toFixed(5);
+    if (col) line += ' ' + Math.round(col.getX(i)*255) + ' ' + Math.round(col.getY(i)*255) + ' ' + Math.round(col.getZ(i)*255);
+    parts.push(line);
+  }
+  return new Blob([parts.join('\n')], { type: 'text/plain' });
+}
+function _cloudToPLY(cloud) {
+  const pos = cloud.geometry.getAttribute('position');
+  const col = cloud.geometry.getAttribute('color');
+  cloud.updateMatrixWorld(true);
+  const mw = cloud.matrixWorld;
+  const v = new THREE.Vector3();
+  const header =
+    'ply\nformat ascii 1.0\n' +
+    'element vertex ' + pos.count + '\n' +
+    'property float x\nproperty float y\nproperty float z\n' +
+    (col ? 'property uchar red\nproperty uchar green\nproperty uchar blue\n' : '') +
+    'end_header\n';
+  const parts = [];
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i).applyMatrix4(mw);
+    let line = v.x.toFixed(5) + ' ' + v.y.toFixed(5) + ' ' + v.z.toFixed(5);
+    if (col) line += ' ' + Math.round(col.getX(i)*255) + ' ' + Math.round(col.getY(i)*255) + ' ' + Math.round(col.getZ(i)*255);
+    parts.push(line);
+  }
+  return new Blob([header + parts.join('\n')], { type: 'text/plain' });
+}
+function _cloudToOBJ(cloud) {
+  const pos = cloud.geometry.getAttribute('position');
+  cloud.updateMatrixWorld(true);
+  const mw = cloud.matrixWorld;
+  const v = new THREE.Vector3();
+  const parts = ['# OBJ exportat de 4 Merge Cloud'];
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i).applyMatrix4(mw);
+    parts.push('v ' + v.x.toFixed(5) + ' ' + v.y.toFixed(5) + ' ' + v.z.toFixed(5));
+  }
+  return new Blob([parts.join('\n')], { type: 'text/plain' });
+}
+async function _cloudToGLB(cloud) {
+  // GLTF minimal amb punts (POINTS primitive). No inclou color per simplicitat.
+  const pos = cloud.geometry.getAttribute('position');
+  cloud.updateMatrixWorld(true);
+  const mw = cloud.matrixWorld;
+  const arr = new Float32Array(pos.count * 3);
+  const v = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i).applyMatrix4(mw);
+    arr[i*3] = v.x; arr[i*3+1] = v.y; arr[i*3+2] = v.z;
+  }
+  const bin = new Uint8Array(arr.buffer);
+  const padded = new Uint8Array(Math.ceil(bin.length/4)*4);
+  padded.set(bin);
+  // Càlcul de min/max necessari a l'accessor
+  let mnx=Infinity,mny=Infinity,mnz=Infinity,mxx=-Infinity,mxy=-Infinity,mxz=-Infinity;
+  for (let i = 0; i < pos.count; i++) {
+    const x=arr[i*3],y=arr[i*3+1],z=arr[i*3+2];
+    if (x<mnx)mnx=x; if (y<mny)mny=y; if (z<mnz)mnz=z;
+    if (x>mxx)mxx=x; if (y>mxy)mxy=y; if (z>mxz)mxz=z;
+  }
+  const gltf = {
+    asset:{version:'2.0',generator:'4 Merge Cloud'},
+    buffers:[{byteLength:padded.length}],
+    bufferViews:[{buffer:0,byteOffset:0,byteLength:bin.length,target:34962}],
+    accessors:[{bufferView:0,componentType:5126,count:pos.count,type:'VEC3',min:[mnx,mny,mnz],max:[mxx,mxy,mxz]}],
+    meshes:[{primitives:[{attributes:{POSITION:0},mode:0}]}],
+    nodes:[{mesh:0}], scenes:[{nodes:[0]}], scene:0
+  };
+  const jsonStr = JSON.stringify(gltf);
+  const jsonBytes = new TextEncoder().encode(jsonStr);
+  const jsonPad = new Uint8Array(Math.ceil(jsonBytes.length/4)*4 - jsonBytes.length).fill(0x20);
+  const jsonChunk = new Uint8Array(jsonBytes.length + jsonPad.length);
+  jsonChunk.set(jsonBytes); jsonChunk.set(jsonPad, jsonBytes.length);
+  // GLB container: header(12) + jsonChunkHeader(8) + jsonChunk + binChunkHeader(8) + binChunk
+  const totalLen = 12 + 8 + jsonChunk.length + 8 + padded.length;
+  const out = new Uint8Array(totalLen);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(0, 0x46546C67, true);   // "glTF"
+  dv.setUint32(4, 2, true);
+  dv.setUint32(8, totalLen, true);
+  dv.setUint32(12, jsonChunk.length, true);
+  dv.setUint32(16, 0x4E4F534A, true);   // "JSON"
+  out.set(jsonChunk, 20);
+  dv.setUint32(20 + jsonChunk.length, padded.length, true);
+  dv.setUint32(24 + jsonChunk.length, 0x004E4942, true);   // "BIN\0"
+  out.set(padded, 28 + jsonChunk.length);
+  return new Blob([out], { type: 'model/gltf-binary' });
+}
+async function _driveSaveProject() {
+  if (typeof window.MCDrive?.saveProjectToDrive === 'function') { await window.MCDrive.saveProjectToDrive(); return; }
+  // Fallback: dispara el botó antic tbDriveSave si existeix
+  const legacy = document.getElementById('tbDriveSave');
+  if (legacy) { legacy.click(); return; }
+  alert('Google Drive no disponible encara. Prova amb destí Local.');
+}
+async function _driveUploadBlob(blob, name) {
+  if (window.MCDrive && typeof window.MCDrive.uploadBlobToPickedFolder === 'function') {
+    try { await window.MCDrive.uploadBlobToPickedFolder(blob, name); return; }
+    catch (e) { alert('Error pujant a Drive: ' + e.message); return; }
+  }
+  alert('Pujada directa de fitxers no-projecte a Drive encara no està disponible. S\'ha descarregat localment.');
+  _downloadBlob(blob, name);
+}
+
+// ── Clip interior dinàmic ──
+// Afegeix o treu un pla de tall en l'eix cap endavant de la càmera, perquè
+// els punts/malla just davant de la càmera (la paret que ens tapa la vista
+// cap a dintre) es facin invisibles mentre "Interior" està activat.
+let _interiorPlane = null;
+function _updateInteriorClip() {
+  const on = window._meshSideMode === 'back';
+  if (!on) {
+    if (_interiorPlane) { _interiorPlane = null; updateClipPlanes(); }
+    return;
+  }
+  // Crea el pla (serà actualitzat cada frame per _onBeforeRender)
+  if (!_interiorPlane) _interiorPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+  _refreshInteriorPlane();
+  updateClipPlanes();
+}
+function _refreshInteriorPlane() {
+  if (!_interiorPlane) return;
+  const cam = (useOrtho && orthoCamera) ? orthoCamera : camera;
+  const dir = new THREE.Vector3(); cam.getWorldDirection(dir).normalize();
+  // Pla: normal = direcció càmera; constant = -dot(normal, posició). Els punts
+  // davant del pla queden amb distanceToPoint(p) < 0 i es retallen.
+  // Lleugerament desplaçat endavant perquè no mostri res "a tocar" de càmera.
+  const pos = cam.position.clone().addScaledVector(dir, 0.01);
+  _interiorPlane.setFromNormalAndCoplanarPoint(dir, pos);
 }
 
 // ── Panell de diagnòstic ──
@@ -8657,6 +8904,7 @@ function animate() {
     } else {
       controls.update();
     }
+    _refreshInteriorPlane();
     updateClipPlanes();
     updateGizmo();
 

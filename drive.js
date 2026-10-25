@@ -271,6 +271,16 @@
     listLibraryFiles,
     openLibraryFile,
     fetchThumbnail,
+    openFromDrive,
+    saveProjectToDrive: saveToDrive,
+    uploadBlobToPickedFolder: async (blob, name) => {
+      const token = await requestToken();
+      const folder = await pickFolder(token);
+      if (!folder) return null;
+      const uploaded = await uploadToDrive(name, blob, folder.id);
+      alert('Pujat a Drive com a "' + (uploaded.name || name) + '"');
+      return uploaded;
+    },
     clearLibraryFolder: () => setLibraryFolder(null),
   };
 
