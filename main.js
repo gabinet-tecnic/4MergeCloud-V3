@@ -7863,12 +7863,14 @@ function initTopUI() {
   document.getElementById('tbOpen')?.addEventListener('click', () => _openDialog());
   document.getElementById('tbMerge')?.addEventListener('click', () => mergeCloudsInScene());
   document.getElementById('qtMerge')?.addEventListener('click', () => mergeCloudsInScene());
-  // Vista Interior / Tot: alterna entre BackSide (com Polycam, útil per escaneigs
-  // d'habitacions tancades) i DoubleSide (segur per a qualsevol escaneig).
+  // Vista Interior / Tot: alterna entre FrontSide (com Polycam: amb les
+  // normals cap a dintre dels escaneigs d'habitacions, FrontSide fa que les
+  // parets exteriors siguin invisibles des de fora — pots mirar a dintre) i
+  // DoubleSide (segur per a qualsevol escaneig, es veu per totes dues cares).
   // Per defecte "double" perquè molts escaneigs (peces, exteriors, superfícies primes)
-  // es veurien amb forats amb BackSide.
+  // es veurien amb forats amb FrontSide.
   window._meshSideMode = 'double';
-  window._meshSide = () => window._meshSideMode === 'back' ? THREE.BackSide : THREE.DoubleSide;
+  window._meshSide = () => window._meshSideMode === 'back' ? THREE.FrontSide : THREE.DoubleSide;
   const _tbMeshSide = document.getElementById('tbMeshSide');
   const _qtInterior = document.getElementById('qtInterior');
   function _applyMeshSideToAll() {
