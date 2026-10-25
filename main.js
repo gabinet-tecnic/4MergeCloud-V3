@@ -1423,6 +1423,124 @@ function _downloadBlob(blob, name) {
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
+// ── Submostreig per mantenir fluidesa en dispositius amb poca memòria ────
+// Si un núvol passa de 2.5M punts, agafem un de cada N perquè l'iPad/Safari
+// no es quedi penjat. L'usuari ho pot desactivar amb window._subsampleEnabled=false.
+const SUBSAMPLE_THRESHOLD = 2500000;
+const SUBSAMPLE_TARGET    = 2000000;
+if (typeof window._subsampleEnabled === 'undefined') window._subsampleEnabled = true;
+function _subsampleCloudIfLarge(cloud) {
+  if (!window._subsampleEnabled) return;
+  const pos = cloud.geometry.getAttribute('position');
+  if (!pos || pos.count <= SUBSAMPLE_THRESHOLD) return;
+  const col = cloud.geometry.getAttribute('color');
+  const stride = Math.max(2, Math.ceil(pos.count / SUBSAMPLE_TARGET));
+  const kept = Math.ceil(pos.count / stride);
+  const newPos = new Float32Array(kept * 3);
+  const newCol = col ? new Float32Array(kept * 3) : null;
+  let j = 0;
+  for (let i = 0; i < pos.count; i += stride) {
+    newPos[j*3]   = pos.getX(i);
+    newPos[j*3+1] = pos.getY(i);
+    newPos[j*3+2] = pos.getZ(i);
+    if (newCol) {
+      newCol[j*3]   = col.getX(i);
+      newCol[j*3+1] = col.getY(i);
+      newCol[j*3+2] = col.getZ(i);
+    }
+    j++;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(newPos.subarray(0, j*3), 3));
+  if (newCol) g.setAttribute('color', new THREE.BufferAttribute(newCol.subarray(0, j*3), 3));
+  g.computeBoundingBox(); g.computeBoundingSphere();
+  const oldCount = pos.count;
+  cloud.geometry.dispose();
+  cloud.geometry = g;
+  diag('submostreig: ' + oldCount.toLocaleString() + ' → ' + j.toLocaleString() + ' punts (1/' + stride + ')');
+}
+
+// ── Escriptor ZIP STORE (sense compressió) ──
+// Mínim, pur JS, per empaquetar diversos fitxers en una sola descàrrega.
+// Útil per iPad Safari que només permet 1 download per gest d'usuari.
+const _CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c;
+  }
+  return t;
+})();
+function _crc32(bytes) {
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) c = _CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+async function _makeZipBlob(entries) {
+  // entries: [{ name:'foo.png', bytes:Uint8Array }, ...]
+  const parts = [];
+  const dirEntries = [];
+  let offset = 0;
+  for (const e of entries) {
+    const nameBytes = new TextEncoder().encode(e.name);
+    const crc = _crc32(e.bytes);
+    const size = e.bytes.length;
+    // Local file header
+    const lh = new Uint8Array(30 + nameBytes.length);
+    const dvLH = new DataView(lh.buffer);
+    dvLH.setUint32(0, 0x04034b50, true);
+    dvLH.setUint16(4, 20, true);        // version needed
+    dvLH.setUint16(6, 0x0800, true);    // UTF-8 flag
+    dvLH.setUint16(8, 0, true);         // method STORE
+    dvLH.setUint16(10, 0, true);        // mod time
+    dvLH.setUint16(12, 0, true);        // mod date
+    dvLH.setUint32(14, crc, true);
+    dvLH.setUint32(18, size, true);
+    dvLH.setUint32(22, size, true);
+    dvLH.setUint16(26, nameBytes.length, true);
+    dvLH.setUint16(28, 0, true);        // extra length
+    lh.set(nameBytes, 30);
+    parts.push(lh);
+    parts.push(e.bytes);
+    // Central directory entry
+    const cd = new Uint8Array(46 + nameBytes.length);
+    const dvCD = new DataView(cd.buffer);
+    dvCD.setUint32(0, 0x02014b50, true);
+    dvCD.setUint16(4, 20, true); dvCD.setUint16(6, 20, true);
+    dvCD.setUint16(8, 0x0800, true); dvCD.setUint16(10, 0, true);
+    dvCD.setUint16(12, 0, true); dvCD.setUint16(14, 0, true);
+    dvCD.setUint32(16, crc, true);
+    dvCD.setUint32(20, size, true); dvCD.setUint32(24, size, true);
+    dvCD.setUint16(28, nameBytes.length, true);
+    dvCD.setUint16(30, 0, true); dvCD.setUint16(32, 0, true);
+    dvCD.setUint16(34, 0, true); dvCD.setUint16(36, 0, true);
+    dvCD.setUint32(38, 0, true);
+    dvCD.setUint32(42, offset, true);
+    cd.set(nameBytes, 46);
+    dirEntries.push(cd);
+    offset += lh.length + size;
+  }
+  const centralSize = dirEntries.reduce((s, c) => s + c.length, 0);
+  const centralOffset = offset;
+  for (const cd of dirEntries) parts.push(cd);
+  // End of central directory
+  const eocd = new Uint8Array(22);
+  const dvE = new DataView(eocd.buffer);
+  dvE.setUint32(0, 0x06054b50, true);
+  dvE.setUint16(4, 0, true); dvE.setUint16(6, 0, true);
+  dvE.setUint16(8, entries.length, true);
+  dvE.setUint16(10, entries.length, true);
+  dvE.setUint32(12, centralSize, true);
+  dvE.setUint32(16, centralOffset, true);
+  dvE.setUint16(20, 0, true);
+  parts.push(eocd);
+  return new Blob(parts, { type: 'application/zip' });
+}
+async function _blobToUint8(blob) {
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
 // ── Ortoimatge ─────────────────────────────────────────────────────────────
 // Captura la vista ortogonal actual com una imatge rasteritzada a una resolució
 // controlada (px/m). Genera: PNG + world file (.pgw) + sidecar .txt amb els
@@ -1561,14 +1679,20 @@ function _orthoCapture() {
 
   const base = 'ortho_' + viewLabel.split(' ')[0].toLowerCase() + '_' + new Date().toISOString().slice(0, 10);
 
-  // PNG
-  fetch(dataURL).then(r => r.blob()).then(blob => {
-    _downloadBlob(blob, base + '.png');
-    _downloadBlob(new Blob([wld], { type: 'text/plain' }), base + '.pgw');
-    _downloadBlob(new Blob([wld], { type: 'text/plain' }), base + '.wld');   // alias per compatibilitat GIS
-    _downloadBlob(new Blob([sidecar], { type: 'text/plain' }), base + '.txt');
+  // Empaquetat ZIP: iPad Safari bloqueja descàrregues múltiples per gest, així
+  // que ho juntem tot (PNG + .pgw + .wld + .txt) en un sol fitxer ZIP.
+  fetch(dataURL).then(r => r.blob()).then(async pngBlob => {
+    const pngBytes = await _blobToUint8(pngBlob);
+    const enc = new TextEncoder();
+    const zipBlob = await _makeZipBlob([
+      { name: base + '.png', bytes: pngBytes },
+      { name: base + '.pgw', bytes: enc.encode(wld) },
+      { name: base + '.wld', bytes: enc.encode(wld) },
+      { name: base + '.txt', bytes: enc.encode(sidecar) },
+    ]);
+    _downloadBlob(zipBlob, base + '.zip');
   });
-  diag('ortoimatge capturada: ' + viewLabel + ' · ' + imgW + '×' + imgH + ' px');
+  diag('ortoimatge capturada: ' + viewLabel + ' · ' + imgW + '×' + imgH + ' px (ZIP)');
 }
 
 function removeClipBox() {
@@ -5033,6 +5157,7 @@ function setupUI() {
           if (badge) badge.style.display = 'none';
         }
 
+        _subsampleCloudIfLarge(cloud);
         adaptPointSize(cloud);
         scene.add(cloud);
         clouds.push(cloud);
