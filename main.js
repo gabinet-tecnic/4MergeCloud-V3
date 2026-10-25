@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ, loadLAS } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '3.0.0-dev';
+const APP_VERSION = '3.1.1-drawing';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -83,7 +83,7 @@ const AUTOHEAL_RULES = [
     cooldownMs: 15_000,
     label: 'editor2d no s\'ha carregat — s\'esborra la cache d\'import',
     async heal() {
-      _ed2d = null; _ed2dActive = false; _ed2dWired = false;
+      _ed2d?.dispose?.(); _ed2d = null; _ed2dActive = false; _ed2dWired = false;
       return 'editor invalidat — es tornarà a importar al proper "Activar editor"';
     },
   },
@@ -1047,6 +1047,9 @@ let measurements = [];
 // mode exclusiu; `except` evita aturar el propi.
 function _exitExclusiveTools(opts) {
   const except = opts?.except;
+  if (except !== 'drawing' && typeof _ed2dActive !== 'undefined' && _ed2dActive) {
+    _ed2dActive = false; _ed2d?.setActive(false);
+  }
   try {
     if (except !== 'annotate' && typeof _annActive !== 'undefined' && _annActive && typeof stopAnnotate === 'function') stopAnnotate();
   } catch (_) {}
@@ -1155,7 +1158,7 @@ function init() {
 
   // preserveDrawingBuffer NO: duplicava el back-buffer permanentment (memòria extra
   // notable a iPad). Cap funció actual el necessita (no fem toDataURL del canvas).
-  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(width, height);
   renderer.localClippingEnabled = true;
@@ -2641,25 +2644,9 @@ function _annTEnd(e) {
   _annCurrent = null;
 }
 
-function startAnnotate() {
-  // FIX v2.33.2: idempotent. Si ja està activa, no tornem a afegir listeners
-  // (evita duplicats acumulats si algú crida startAnnotate dues vegades).
-  if (_annActive) return;
-  _exitExclusiveTools({ except: 'annotate' });
-  _annActive = true;
-  _annResize();
-  const viewer = document.getElementById('viewer');
-  viewer.classList.add('annotate-active');
-  if (renderer) renderer.domElement.style.pointerEvents = 'none';
-  viewer.addEventListener('pointerdown', _annDown,   { passive:false });
-  viewer.addEventListener('pointermove', _annMove,   { passive:false });
-  viewer.addEventListener('pointerup',   _annUp,     { passive:false });
-  viewer.addEventListener('touchstart',  _annTStart, { passive:false });
-  viewer.addEventListener('touchmove',   _annTMove,  { passive:false });
-  viewer.addEventListener('touchend',    _annTEnd,   { passive:false });
-  document.getElementById('btnAnnotate')?.classList.add('active');
-  const _ap = document.getElementById('annotatePanel');
-  if (_ap) _ap.style.display = 'block';
+async function startAnnotate() {
+  if (!_ed2dActive) await toggleEditor2D();
+  _ed2d?.setMode('draw');
 }
 
 function stopAnnotate() {
@@ -6856,7 +6843,7 @@ function initLibraryUI() {
 
 async function restoreSession() {
   let data;
-  try { data = await idbGet(MC_KEY); } catch (_) { _sessionReady = true; return; }
+  try { data = await idbGet(MC_KEY); } catch (_) { /* Drawing can still recover from localStorage. */ }
   if (data && data.clouds && data.clouds.length) {
     _restoring = true;
     try {
@@ -6874,6 +6861,12 @@ async function restoreSession() {
     } catch (e) { diag('⚠ restaurar sessió ha fallat: ' + e.message); }
     _restoring = false;
   }
+  try {
+    let localDrawing = null;
+    try { localDrawing = JSON.parse(localStorage.getItem('mc_editor_state') || 'null'); } catch (_) {}
+    const drawing = localDrawing && (!data?.drawing || (localDrawing.updatedAt || 0) >= (data.drawing.updatedAt || 0)) ? localDrawing : data?.drawing;
+    if (drawing) { const ed = await _ensureEditor2D(); ed.setState(drawing); _wireEditorButtons(ed); }
+  } catch(e) { diag('⚠ No s’ha pogut restaurar el dibuix: ' + e.message); }
   _sessionReady = true;
 }
 
@@ -7010,7 +7003,8 @@ async function loadProject(file) {
     else if (cloud.userData?.glbBytes) attachMeshFromGlb(cloud);
   }
   if (data.drawing) {
-    try { localStorage.setItem('mc_editor_state', JSON.stringify(data.drawing)); if (_ed2d) _ed2d.setState(data.drawing); } catch (_) {}
+    const ed = await _ensureEditor2D(); ed.setState(data.drawing); _wireEditorButtons(ed);
+    try { localStorage.setItem('mc_editor_state', JSON.stringify(ed.getState())); } catch (_) {}
   }
   if (clouds.length) { const last = clouds[clouds.length - 1]; selectCloud(last); fitCameraToObject(last); }
   updateCloudList(); updateRaycasterThreshold(); onWindowResize();
@@ -7757,9 +7751,39 @@ let _edPrevOrtho = false;   // vista abans d'entrar a l'editor (per restaurar-la
 
 async function _ensureEditor2D() {
   if (_ed2d) return _ed2d;
-  const mod = await import('./editor2d.js?v=' + APP_VERSION);
+  const mod = await import('./drawing3d.js?v=' + APP_VERSION);
+  if (_ed2d) return _ed2d; // A session restore and a tab click may await the same import.
   _ed2d = mod.createEditor2D({
     THREE, scene, renderer,
+    closeDrawing: () => document.getElementById('tabCloud')?.click(),
+    setDrawingNavigation: (on, navigate) => {
+      for (const c of [controls, orthoControls]) {
+        c.enableRotate = true; c.enableZoom = true; c.enablePan = true;
+        c.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+        c.mouseButtons = { LEFT: on && !navigate ? null : THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+      }
+      controls.enabled = !useOrtho; orthoControls.enabled = useOrtho;
+      if (transformControls) transformControls.enabled = !on;
+    },
+    alignToPlane: p => {
+      const u = new THREE.Vector3(...p.u), v = new THREE.Vector3(...p.v);
+      setOrthoView(u.cross(v).normalize(), v);
+      const target = new THREE.Vector3(...p.origin), delta = target.clone().sub(orthoControls.target);
+      orthoCamera.position.add(delta); orthoControls.target.copy(target); orthoControls.update();
+    },
+    perspective: () => activate3DView(),
+    pickSurfacePoint: (x,y) => {
+      const r = renderer.domElement.getBoundingClientRect(), rc = new THREE.Raycaster();
+      rc.params.Points.threshold = 0.15;
+      rc.setFromCamera(new THREE.Vector2((x-r.left)/r.width*2-1, 1-(y-r.top)/r.height*2), useOrtho ? orthoCamera : camera);
+      const visible = o => { for(let n=o;n;n=n.parent) if(!n.visible)return false;return true; };
+      const hits = rc.intersectObjects(clouds.filter(c=>c.visible),true).filter(h=>visible(h.object));
+      if (!hits.length) return null;
+      const hit = hits[0];
+      return hit.object.isPoints && Number.isInteger(hit.index)
+        ? new THREE.Vector3().fromBufferAttribute(hit.object.geometry.attributes.position,hit.index).applyMatrix4(hit.object.matrixWorld)
+        : hit.point.clone();
+    },
     screenToWorld:      (x, y) => _traceRaycast(x, y),
     // Snap al núvol de punts: retorna la posició d'un punt del núvol si n'hi ha
     // un prou a prop en píxels. maxPx = radi de captura sobre la pantalla.
@@ -8041,6 +8065,16 @@ function _edSetModeBtn(m) {
 }
 
 function _wireEditorButtons(ed) {
+  if (ed.floating) {
+    if (_ed2dWired) return;
+    _ed2dWired = true;
+    ed.onChange = () => {
+      try { localStorage.setItem('mc_editor_state', JSON.stringify(ed.getState())); }
+      catch (e) { diag('⚠ No s’ha pogut desar el dibuix al navegador: ' + e.message); }
+      persistSession();
+    };
+    return;
+  }
   if (_ed2dWired) return;
   _ed2dWired = true;
   const upd = () => {
@@ -8278,7 +8312,9 @@ async function toggleEditor2D() {
   catch (e) { console.error('editor2d load failed:', e); alert('No s\'ha pogut carregar l\'editor de planta: ' + e.message); return; }
   _wireEditorButtons(ed);
 
-  _ed2dActive = !_ed2dActive;
+  const nextActive = !_ed2dActive;
+  if (nextActive) _exitExclusiveTools({ except: 'drawing' });
+  _ed2dActive = nextActive;
   diag('editor ' + (_ed2dActive ? 'ACTIVAT' : 'aturat'));
   logAction('editor_toggle', { active: _ed2dActive, view: _currentViewLabel() });
   const tools = document.getElementById('editorTools');
@@ -8291,11 +8327,11 @@ async function toggleEditor2D() {
     tools.style.display = 'flex';
     btn.textContent = '⏹ Aturar editor';
     btn.classList.add('active');
-    ed.setMode('select'); _edSetModeBtn('select');   // per defecte, mode selecció (CAD estàndard)
+    ed.setMode(ed.floating ? 'draw' : 'select'); _edSetModeBtn('select');   // per defecte, mode selecció (CAD estàndard)
     if (ed.onChange) ed.onChange();
   } else {
     ed.setActive(false);
-    if (!_edPrevOrtho) activate3DView();                  // restaura la vista 3D si hi érem
+    if (!ed.floating && !_edPrevOrtho) activate3DView();                  // restaura la vista 3D si hi érem
     if (selectedCloud && transformControls) {             // reenganxa el gizmo al núvol
       transformControls.attach(selectedCloud);
       transformControls.setMode(cloudTCMode);

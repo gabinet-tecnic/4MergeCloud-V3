@@ -1,12 +1,14 @@
 // Service Worker — Merge Cloud PWA
 // redeploy: re-trigger GitHub Pages (deploy encallat)
-const CACHE = 'mergecloud-v75';
+const CACHE = 'mergecloud-v77-drawing';
 
 const ASSETS = [
   './index.html',
   './index-ca.html',
   './main.js',
   './editor2d.js',
+  './drawing3d.js',
+  './drawing-geometry.js',
   './manifest.json',
   './three/three.module.js',
   './jsm/controls/OrbitControls.js',
