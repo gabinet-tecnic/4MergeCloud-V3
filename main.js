@@ -7876,19 +7876,25 @@ function initTopUI() {
     const isBack = window._meshSideMode === 'back';
     for (const c of clouds) {
       const mv = c.userData?.meshView;
-      if (!mv) continue;
-      mv.traverse(o => {
-        if (o.isMesh && o.material) {
-          const mats = Array.isArray(o.material) ? o.material : [o.material];
-          for (const m of mats) { m.side = side; m.needsUpdate = true; }
-        }
-      });
+      if (mv) {
+        mv.traverse(o => {
+          if (o.isMesh && o.material) {
+            const mats = Array.isArray(o.material) ? o.material : [o.material];
+            for (const m of mats) { m.side = side; m.needsUpdate = true; }
+          }
+        });
+      }
+      // Interior = com Polycam: amaga el núvol de punts i mostra només la
+      // malla amb back-face culling. Així es veu l'interior "a través" de la
+      // paret davantera sense cap tall basat en la càmera.
+      // Si no hi ha malla, deixem els punts visibles perquè si no no es veuria res.
+      if (c.material) {
+        if (isBack && mv && mv.children.length > 0) c.material.visible = false;
+        else c.material.visible = true;
+      }
     }
     if (_tbMeshSide) _tbMeshSide.textContent = isBack ? 'Interior ✓' : 'Interior';
     if (_qtInterior) _qtInterior.classList.toggle('active', isBack);
-    // En Interior, també oculta els punts "frontals" (els que miren a càmera i
-    // tapen la vista cap a dintre) via un pla de tall dinàmic davant la càmera.
-    _updateInteriorClip();
   }
   const _interiorHandler = () => {
     window._meshSideMode = window._meshSideMode === 'back' ? 'double' : 'back';
@@ -8118,37 +8124,11 @@ async function _driveUploadBlob(blob, name) {
   _downloadBlob(blob, name);
 }
 
-// ── Clip interior dinàmic ──
-// Afegeix o treu un pla de tall en l'eix cap endavant de la càmera, perquè
-// els punts/malla just davant de la càmera (la paret que ens tapa la vista
-// cap a dintre) es facin invisibles mentre "Interior" està activat.
+// ── Interior (eliminat el pla dinàmic — ara només back-face culling + amaga
+// el núvol de punts quan hi ha malla, replicant el comportament de Polycam) ──
 let _interiorPlane = null;
-function _updateInteriorClip() {
-  const on = window._meshSideMode === 'back';
-  if (!on) {
-    if (_interiorPlane) { _interiorPlane = null; updateClipPlanes(); }
-    return;
-  }
-  // Crea el pla (serà actualitzat cada frame per _onBeforeRender)
-  if (!_interiorPlane) _interiorPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
-  _refreshInteriorPlane();
-  updateClipPlanes();
-}
-function _refreshInteriorPlane() {
-  if (!_interiorPlane) return;
-  const cam = (useOrtho && orthoCamera) ? orthoCamera : camera;
-  const ctrl = useOrtho ? orthoControls : controls;
-  const dir = new THREE.Vector3(); cam.getWorldDirection(dir).normalize();
-  // El pla el situem al punt que mira la càmera (controls.target). Tot el
-  // que està ENTRE la càmera i el target queda amagat — justament la "paret
-  // davantera" que ens tapa la vista de l'interior. Deixem un petit marge
-  // perquè el propi target no es talli a si mateix.
-  const target = (ctrl && ctrl.target) ? ctrl.target.clone() : cam.position.clone().addScaledVector(dir, 1);
-  // Lleuger desplaçament en direcció cap endavant perquè el target quedi al
-  // costat visible del pla.
-  target.addScaledVector(dir, 0.02);
-  _interiorPlane.setFromNormalAndCoplanarPoint(dir, target);
-}
+function _updateInteriorClip() { /* no-op (compat) */ }
+function _refreshInteriorPlane() { /* no-op (compat) */ }
 
 // ── Panell de diagnòstic ──
 function _diagStateSummary() {
