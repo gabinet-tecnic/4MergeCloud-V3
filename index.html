@@ -2,6 +2,7 @@
 <html lang="ca">
 <head>
   <meta charset="utf-8">
+  <meta name="referrer" content="no-referrer">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <title>4 Merge Cloud</title>
   <link rel="manifest" href="manifest.json">
@@ -637,6 +638,7 @@
     html:lang(en) #cloudListPanel:empty::before { content: 'No active cloud'; }
     html:lang(en) #dxfListPanel:empty::before { content: 'No DXF loaded'; }
   </style>
+<link rel="stylesheet" href="projectes.css">
 </head>
 <body>
 
@@ -662,6 +664,7 @@
       <button class="lang-btn" data-lang="en">ENG</button>
     </div>
     <button id="tbAI" class="tb-btn" title="Detecció d'objectes amb IA">🤖 IA</button>
+    <button id="tbProjects" class="tb-btn" type="button" disabled>📂 Projectes</button>
     <button id="tbDiag" class="tb-btn" title="Registre de diagnòstic">Diagnòstic</button>
   </div>
 
@@ -996,6 +999,7 @@
             <input id="orthoPxPerM" type="number" min="10" max="2000" step="10" value="200" style="flex:1;background:#1a2030;border:1px solid #2a3050;color:#eaf;padding:4px 6px;border-radius:4px;font-size:11px">
             <span style="font-size:10px;color:#9cf">px/m</span>
           </div>
+          <div class="project-upload"><label for="orthoProject">Projecte de destinació</label><select id="orthoProject"><option value="">Inicia sessió a Projectes</option></select><button id="orthoProjectUpload" type="button" disabled>☁ Pujar a projecte</button><p id="orthoProjectStatus" role="status"></p></div>
           <div id="orthoFrameInfo" style="font-size:10px;color:#667;margin-top:4px;line-height:1.3"></div>
           <div class="btn-row" style="margin-top:6px">
             <button id="orthoCapture" class="btn-green" style="flex:2">&#128247; Capturar ortoimatge</button>
@@ -1375,10 +1379,7 @@
       });
     });
   </script>
-  <script src="https://apis.google.com/js/api.js" async defer></script>
-  <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="drive.js"></script>
-  <script type="module" src="main.js?v=v3-2026102504"></script>
+  <script type="module" src="app-entry.js?v=v3-2026102506"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {

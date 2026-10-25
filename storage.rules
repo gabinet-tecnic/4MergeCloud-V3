@@ -1,0 +1,16 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function project(pid) { return firestore.get(/databases/(default)/documents/projects/$(pid)).data; }
+    function owner(pid) { return request.auth != null && project(pid).ownerUid == request.auth.uid && firestore.exists(/databases/(default)/documents/owners/$(request.auth.uid)); }
+    function member(pid) { return request.auth != null && firestore.exists(/databases/(default)/documents/projects/$(pid)/members/$(request.auth.uid)) && firestore.get(/databases/(default)/documents/projects/$(pid)/members/$(request.auth.uid)).data.expiresAt > request.time; }
+    match /projects/{pid}/{file} {
+      allow read: if !project(pid).deleting && (owner(pid) || member(pid));
+      allow create: if !project(pid).deleting && owner(pid) && request.resource.size < 20 * 1024 * 1024
+        && ((file.matches('[a-zA-Z0-9]+[.]png') && request.resource.contentType == 'image/png')
+         || (file.matches('[a-zA-Z0-9]+_thumb[.]jpg') && request.resource.contentType == 'image/jpeg'));
+      allow delete: if owner(pid);
+      allow update: if false;
+    }
+  }
+}

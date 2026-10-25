@@ -15,3 +15,10 @@ icons/borrador/
 
 # Scripts auxiliars
 xyz_to_dxf.py
+
+node_modules/
+*-debug.log
+.firebase/
+.firebaserc
+functions/.env*
+*service-account*.json

@@ -1,0 +1,33 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signed() { return request.auth != null; }
+    function owner(p) { return signed() && p.ownerUid == request.auth.uid && exists(/databases/$(database)/documents/owners/$(request.auth.uid)); }
+    function member(pid) { return signed() && exists(/databases/$(database)/documents/projects/$(pid)/members/$(request.auth.uid)) && get(/databases/$(database)/documents/projects/$(pid)/members/$(request.auth.uid)).data.expiresAt > request.time; }
+    function project(pid) { return get(/databases/$(database)/documents/projects/$(pid)).data; }
+    match /projects/{pid} {
+      allow read: if owner(resource.data) || (!resource.data.deleting && member(pid));
+      // Project/slug/password lifecycle is exclusively handled by callable functions.
+      allow write: if false;
+      match /captures/{cid} {
+        allow read: if !project(pid).deleting && (owner(project(pid)) || member(pid));
+        allow create: if !project(pid).deleting && owner(project(pid))
+          && request.resource.data.keys().hasOnly(['fileName','imagePath','thumbPath','metadata','uploadedAt','uploaderUid','annotations','revision'])
+          && request.resource.data.uploaderUid == request.auth.uid
+          && request.resource.data.imagePath == 'projects/' + pid + '/' + cid + '.png'
+          && request.resource.data.thumbPath == 'projects/' + pid + '/' + cid + '_thumb.jpg'
+          && request.resource.data.fileName is string && request.resource.data.fileName.size() <= 180
+          && request.resource.data.metadata is map && request.resource.data.uploadedAt == request.time
+          && request.resource.data.annotations == [] && request.resource.data.revision == 0;
+        allow update: if !project(pid).deleting && (owner(project(pid)) || member(pid))
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['annotations','authorName','updatedAt','revision'])
+          && request.resource.data.annotations is list && request.resource.data.annotations.size() <= 2000
+          && request.resource.data.authorName is string && request.resource.data.authorName.size() <= 100
+          && request.resource.data.updatedAt == request.time
+          && request.resource.data.revision == resource.data.revision + 1;
+        allow delete: if owner(project(pid));
+      }
+    }
+    match /{document=**} { allow read, write: if false; }
+  }
+}

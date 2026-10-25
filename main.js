@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ, loadLAS } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '3.1.1-drawing';
+const APP_VERSION = '3.2.0-projectes-preview';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -1456,7 +1456,7 @@ function _orthoRefreshFrameInfo() {
 }
 
 // Captura. Fa fallback a 'image/png' per preservar transparència/sense pèrdua.
-function _orthoCapture() {
+function _orthoCapture(options = {}) {
   if (!useOrtho || !orthoCamera) {
     alert('Primer tria una vista ortogonal (Planta, Front, etc.).');
     return;
@@ -1561,6 +1561,10 @@ function _orthoCapture() {
 
   const base = 'ortho_' + viewLabel.split(' ')[0].toLowerCase() + '_' + new Date().toISOString().slice(0, 10);
 
+  if (options.upload) return fetch(dataURL).then(r => r.blob()).then(blob => ({
+    blob, name: base + '.png', metadata: {width: imgW, height: imgH, pixelsPerMeter: pxm,
+      widthMeters: widthW, heightMeters: heightW, view: viewLabel, worldFile: wld, sidecar}
+  }));
   // PNG
   fetch(dataURL).then(r => r.blob()).then(blob => {
     _downloadBlob(blob, base + '.png');
@@ -9119,3 +9123,6 @@ animate();
   if (body)   body.classList.add('open');
   if (header) header.classList.add('open');
 });
+
+// Projectes es carrega separat: un error de Firebase no bloqueja el visor.
+import("./projectes-ui.js").then(m => m.mountProjects({capture: () => _orthoCapture({upload: true})})).catch(e => console.warn("Projectes:", e.message));

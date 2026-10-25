@@ -1,11 +1,19 @@
 // Service Worker — Merge Cloud PWA
 // redeploy: re-trigger GitHub Pages (deploy encallat)
-const CACHE = 'mergecloud-v77-drawing';
+const CACHE = 'mergecloud-v78-projectes';
 
 const ASSETS = [
   './index.html',
   './index-ca.html',
   './main.js',
+  './app-entry.js',
+  './firebase-config.js',
+  './projectes.js',
+  './projectes-ui.js',
+  './projectes-gallery.js',
+  './projectes-annotations.js',
+  './annotation-model.js',
+  './projectes.css',
   './editor2d.js',
   './drawing3d.js',
   './drawing-geometry.js',
@@ -47,6 +55,10 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   if (!event.request.url.startsWith('http')) return;
+  // Never store shared-link passwords in Cache Storage. Firebase requests bypass
+  // this worker entirely, as do client gallery documents.
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin || url.searchParams.has('project') || url.searchParams.has('pwd')) return;
 
   event.respondWith(
     fetch(event.request).then((response) => {
