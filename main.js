@@ -8137,12 +8137,17 @@ function _updateInteriorClip() {
 function _refreshInteriorPlane() {
   if (!_interiorPlane) return;
   const cam = (useOrtho && orthoCamera) ? orthoCamera : camera;
+  const ctrl = useOrtho ? orthoControls : controls;
   const dir = new THREE.Vector3(); cam.getWorldDirection(dir).normalize();
-  // Pla: normal = direcció càmera; constant = -dot(normal, posició). Els punts
-  // davant del pla queden amb distanceToPoint(p) < 0 i es retallen.
-  // Lleugerament desplaçat endavant perquè no mostri res "a tocar" de càmera.
-  const pos = cam.position.clone().addScaledVector(dir, 0.01);
-  _interiorPlane.setFromNormalAndCoplanarPoint(dir, pos);
+  // El pla el situem al punt que mira la càmera (controls.target). Tot el
+  // que està ENTRE la càmera i el target queda amagat — justament la "paret
+  // davantera" que ens tapa la vista de l'interior. Deixem un petit marge
+  // perquè el propi target no es talli a si mateix.
+  const target = (ctrl && ctrl.target) ? ctrl.target.clone() : cam.position.clone().addScaledVector(dir, 1);
+  // Lleuger desplaçament en direcció cap endavant perquè el target quedi al
+  // costat visible del pla.
+  target.addScaledVector(dir, 0.02);
+  _interiorPlane.setFromNormalAndCoplanarPoint(dir, target);
 }
 
 // ── Panell de diagnòstic ──
