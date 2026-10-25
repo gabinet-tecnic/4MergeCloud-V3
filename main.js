@@ -1433,20 +1433,47 @@ function _subsampleCloudIfLarge(cloud) {
   if (!window._subsampleEnabled) return;
   const pos = cloud.geometry.getAttribute('position');
   if (!pos || pos.count <= SUBSAMPLE_THRESHOLD) return;
-  const col = cloud.geometry.getAttribute('color');
   const stride = Math.max(2, Math.ceil(pos.count / SUBSAMPLE_TARGET));
-  const kept = Math.ceil(pos.count / stride);
+  _applySubsample(cloud, stride, true);
+}
+
+// Submostreig configurable per l'usuari: guarda la geometria completa al
+// primer cop i torna a mostrejar sobre l'original cada vegada. stride=1 →
+// restaura la geometria completa.
+function _applySubsample(cloud, stride, isAuto = false) {
+  if (!cloud) return;
+  if (!cloud.userData._fullGeomSaved) {
+    cloud.userData._fullGeomSaved = {
+      pos: cloud.geometry.getAttribute('position').array,
+      col: cloud.geometry.getAttribute('color')?.array || null,
+      count: cloud.geometry.getAttribute('position').count,
+    };
+  }
+  const src = cloud.userData._fullGeomSaved;
+  const full = src.count;
+  cloud.userData._subsampleStride = Math.max(1, stride | 0);
+  if (cloud.userData._subsampleStride === 1) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(src.pos, 3));
+    if (src.col) g.setAttribute('color', new THREE.BufferAttribute(src.col, 3));
+    g.computeBoundingBox(); g.computeBoundingSphere();
+    cloud.geometry.dispose();
+    cloud.geometry = g;
+    diag('restaurat 1/1: ' + full.toLocaleString() + ' punts');
+    return;
+  }
+  const kept = Math.ceil(full / stride);
   const newPos = new Float32Array(kept * 3);
-  const newCol = col ? new Float32Array(kept * 3) : null;
+  const newCol = src.col ? new Float32Array(kept * 3) : null;
   let j = 0;
-  for (let i = 0; i < pos.count; i += stride) {
-    newPos[j*3]   = pos.getX(i);
-    newPos[j*3+1] = pos.getY(i);
-    newPos[j*3+2] = pos.getZ(i);
+  for (let i = 0; i < full; i += stride) {
+    newPos[j*3]   = src.pos[i*3];
+    newPos[j*3+1] = src.pos[i*3+1];
+    newPos[j*3+2] = src.pos[i*3+2];
     if (newCol) {
-      newCol[j*3]   = col.getX(i);
-      newCol[j*3+1] = col.getY(i);
-      newCol[j*3+2] = col.getZ(i);
+      newCol[j*3]   = src.col[i*3];
+      newCol[j*3+1] = src.col[i*3+1];
+      newCol[j*3+2] = src.col[i*3+2];
     }
     j++;
   }
@@ -1454,10 +1481,9 @@ function _subsampleCloudIfLarge(cloud) {
   g.setAttribute('position', new THREE.BufferAttribute(newPos.subarray(0, j*3), 3));
   if (newCol) g.setAttribute('color', new THREE.BufferAttribute(newCol.subarray(0, j*3), 3));
   g.computeBoundingBox(); g.computeBoundingSphere();
-  const oldCount = pos.count;
   cloud.geometry.dispose();
   cloud.geometry = g;
-  diag('submostreig: ' + oldCount.toLocaleString() + ' → ' + j.toLocaleString() + ' punts (1/' + stride + ')');
+  diag((isAuto ? 'submostreig auto: ' : 'submostreig: ') + full.toLocaleString() + ' → ' + j.toLocaleString() + ' punts (1/' + stride + ')');
 }
 
 // ── Escriptor ZIP STORE (sense compressió) ──
@@ -5274,6 +5300,40 @@ function setupUI() {
     });
   });
 
+  // ── Visualització: mida de punt + densitat (submostreig manual) ──
+  const vpSize = document.getElementById('vizPointSize');
+  const vpSizeVal = document.getElementById('vizPointSizeVal');
+  const vpDens = document.getElementById('vizDensity');
+  const vpDensVal = document.getElementById('vizDensityVal');
+  window._refreshVizControls = () => {
+    const c = selectedCloud || clouds[0];
+    if (!c) { if (vpSize) vpSize.disabled = true; if (vpDens) vpDens.disabled = true; return; }
+    if (vpSize) {
+      vpSize.disabled = false;
+      vpSize.value = (c.material?.size ?? 3);
+      if (vpSizeVal) vpSizeVal.textContent = (+vpSize.value).toFixed(1);
+    }
+    if (vpDens) {
+      vpDens.disabled = false;
+      vpDens.value = (c.userData?._subsampleStride ?? 1);
+      if (vpDensVal) vpDensVal.textContent = '1/' + vpDens.value;
+    }
+  };
+  if (vpSize) vpSize.addEventListener('input', () => {
+    const c = selectedCloud || clouds[0];
+    if (!c || !c.material) return;
+    c.material.size = +vpSize.value;
+    c.material.needsUpdate = true;
+    if (vpSizeVal) vpSizeVal.textContent = (+vpSize.value).toFixed(1);
+  });
+  if (vpDens) vpDens.addEventListener('change', () => {
+    const c = selectedCloud || clouds[0];
+    if (!c) return;
+    _applySubsample(c, +vpDens.value, false);
+    if (vpDensVal) vpDensVal.textContent = '1/' + vpDens.value;
+    updateRaycasterThreshold();
+  });
+
   // ── Caixa de tall (live, per núvol) ──
   document.getElementById('createClipBox').onclick = createClippingBoxAroundSelected;
 
@@ -5750,6 +5810,7 @@ function selectCloud(cloud) {
   else       transformControls.detach();
   updateCloudList();
   syncNumericInputs(cloud);
+  if (typeof window._refreshVizControls === 'function') window._refreshVizControls();
 }
 
 function deleteCloud(cloud) {
