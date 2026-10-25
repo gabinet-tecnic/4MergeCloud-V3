@@ -1,0 +1,42 @@
+const fs=require('fs'),path=require('path'),assert=require('assert/strict');
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+(async()=>{const browser=await chromium.launch({headless:true,...(process.env.CHROME_PATH?{executablePath:process.env.CHROME_PATH}:{})});
+try{const page=await browser.newPage({viewport:{width:1440,height:1000}}),root=path.resolve(__dirname,'..'),errors=[];
+page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());
+await page.route('https://drawing.test/**',async route=>{const u=new URL(route.request().url()),p=path.resolve(root,'.'+(u.pathname==='/'?'/index.html':u.pathname));try{await route.fulfill({body:fs.readFileSync(p),contentType:p.endsWith('.js')?'text/javascript':p.endsWith('.html')?'text/html':'application/octet-stream'});}catch{await route.fulfill({status:404,body:''});}});
+await page.goto('https://drawing.test/');
+let xyz='';for(let y=0;y<=10;y++)for(let x=0;x<=10;x++)xyz+=`${x-5} ${y-5} ${0.3*(x-5)+0.2*(y-5)} 130 160 185\n`;
+await page.locator('#fileInput').setInputFiles({name:'inclined-plane.xyz',mimeType:'text/plain',buffer:Buffer.from(xyz)});
+await page.waitForFunction(()=>window.__mc.clouds.length===1);
+await page.locator('#tabDraw').click();await page.locator('#drawingPalette').waitFor();
+assert.ok((await page.locator('#drawingPalette').boundingBox()).height<580);
+assert.equal(await page.locator('#drawingPalette details[open]').count(),0);
+assert.equal(await page.evaluate(()=>__mc.scene.getObjectByName('Quadrícula de dibuix').type),'GridHelper');
+await page.locator('#drawingPalette details').evaluateAll(items=>items.forEach(d=>d.open=true));
+const action=a=>page.locator(`[data-action="${a}"]`).click().then(()=>page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))));
+const mode=m=>page.locator(`[data-mode="${m}"]`).click();const saved=()=>page.evaluate(()=>JSON.parse(localStorage.getItem('mc_editor_state')));
+const drag=async(a,b)=>{await page.mouse.move(...a);await page.mouse.down();await page.mouse.move(...b,{steps:8});await page.mouse.up();};
+const points=await page.evaluate(()=>{const {THREE,clouds,camera,renderer}=__mc;camera.updateMatrixWorld();const c=clouds[0],pos=c.geometry.attributes.position,r=renderer.domElement.getBoundingClientRect();return [24,30,96].map(i=>{const p=new THREE.Vector3().fromBufferAttribute(pos,i).applyMatrix4(c.matrixWorld).project(camera);return [r.left+(p.x+1)*r.width/2,r.top+(1-p.y)*r.height/2];});});
+await mode('plane-pick');for(const p of points)await page.mouse.click(...p);
+let s=await saved();assert.equal(s.planes.length,2);const tilted=s.planes.find(p=>p.id===s.activePlane);assert.ok(Math.abs(tilted.u[2])+Math.abs(tilted.v[2])>0.05);
+await action('face');await page.locator('[data-width]').fill('60');await page.locator('[data-width]').dispatchEvent('change');await mode('line');await drag([500,400],[800,500]);s=await saved();assert.equal(s.strokes.length,1);assert.equal(s.strokes[0].planeId,tilted.id);
+await mode('edit');const old=JSON.stringify(s.strokes[0].points);await drag([500,400],[520,430]);assert.notEqual(JSON.stringify((await saved()).strokes[0].points),old);
+await action('duplicate');assert.equal((await saved()).strokes.length,2);
+await mode('rect');await drag([600,600],[900,720]);await mode('edit');await drag([600,600],[620,630]);const ring=(await saved()).strokes.at(-1).points;assert.deepEqual(ring[0],ring.at(-1));await action('undo');await action('undo');assert.equal((await saved()).strokes.length,2);
+// Portable editable drawing import, rejection without partial changes, undo.
+const portable=await saved();await page.locator('[data-file]').setInputFiles({name:'roundtrip.4draw',mimeType:'application/json',buffer:Buffer.from(JSON.stringify({format:'4mc-drawing',drawing:portable}))});
+assert.deepEqual((await saved()).strokes,portable.strokes);
+const invalid=structuredClone(portable);invalid.planes[0].u=[0,0,0];await page.locator('[data-file]').setInputFiles({name:'invalid.4draw',mimeType:'application/json',buffer:Buffer.from(JSON.stringify({format:'4mc-drawing',drawing:invalid}))});await page.waitForFunction(()=>document.querySelector('[data-status]').textContent.includes('no vàlid'));assert.deepEqual((await saved()).strokes,portable.strokes);
+await action('perspective');await page.locator('[data-through]').check();await mode('navigate');
+// Floating, collapsible and reachable on a small viewport.
+const box=await page.locator('#drawingPalette').boundingBox();await drag([box.x+80,box.y+20],[box.x+230,box.y+45]);const moved=await page.locator('#drawingPalette').boundingBox();assert.ok(moved.x>box.x);
+await action('collapse');assert.ok((await page.locator('#drawingPalette').boundingBox()).height<100);await action('collapse');
+await page.setViewportSize({width:390,height:844});await page.waitForTimeout(150);const narrow=await page.locator('#drawingPalette').boundingBox();assert.ok(narrow.x>=0&&narrow.x+narrow.width<=390&&narrow.y>=0);await page.setViewportSize({width:1440,height:1000});
+await action('face');await page.locator('[data-through]').uncheck();
+await page.screenshot({path:path.resolve(root,'../drawing-model-preview.png')});
+// Legacy project retains its source data, including semantic wall/opening fields.
+const legacy={nodes:[{id:1,x:0,y:0,z:0},{id:2,x:2,y:0,z:0}],walls:[{a:1,b:2,thickness:0.2}],openings:[{wi:0,t:0.5,width:0.8,type:'door'}],shapes:[]};
+await page.locator('#fileInput').setInputFiles({name:'legacy.4mc',mimeType:'application/json',buffer:Buffer.from(JSON.stringify({format:'4mc-project',version:1,clouds:[],drawing:legacy}))});await page.waitForFunction(()=>JSON.parse(localStorage.getItem('mc_editor_state')).legacySource);s=await saved();assert.deepEqual(s.legacySource,legacy);assert.equal(s.strokes.length,1);
+await action('close');assert.equal(await page.locator('#drawingPalette').isVisible(),false);assert.deepEqual(errors,[]);
+console.log('PASS: real point-cloud plane picking, oblique-plane drawing, point editing, duplicate, portable import, invalid import rollback, floating/mobile palette and legacy project preservation');
+}finally{await browser.close();}})().catch(e=>{console.error(e);process.exit(1)});
