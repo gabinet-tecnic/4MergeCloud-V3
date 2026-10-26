@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="ca">
+<head>
+<meta charset="utf-8">
+<title>4MergeCloud · Setup Privat (ÚS ÚNIC)</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px system-ui; max-width: 640px; margin: 32px auto; padding: 0 16px; }
+  label { display:block; margin: 10px 0 4px; font-weight: 600; }
+  input, textarea { width: 100%; box-sizing: border-box; padding: 8px; font: 13px/1.3 ui-monospace, monospace; border: 1px solid #888; border-radius: 6px; }
+  textarea { min-height: 70px; }
+  button { padding: 10px 20px; font-size: 15px; border-radius: 6px; border: 1px solid #357; background: #4a8; color: #fff; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  .warn { background:#fff8dc; border:1px solid #c09000; padding:10px; border-radius:6px; margin:14px 0; }
+  .ok   { background:#dfffd8; border:1px solid #080; padding:10px; border-radius:6px; margin:14px 0; }
+  .err  { background:#ffe0e0; border:1px solid #c00; padding:10px; border-radius:6px; margin:14px 0; }
+  code { background:#eee; padding:2px 4px; border-radius:3px; }
+</style>
+</head>
+<body>
+
+<h1>Setup Privat — ús únic</h1>
+
+<div class="warn">
+  <strong>Avís:</strong> Aquesta pàgina escriu al Firestore <em>una sola vegada</em> el token xifrat amb la teva contrasenya.
+  Fes-ho des d'un ordinador de confiança, en una xarxa segura.
+  Un cop acabat, <strong>esborra aquest fitxer del repositori</strong> i apliquem les regles finals a Firestore.
+</div>
+
+<form id="setupForm">
+  <label>Refresh token (OAuth del compte Drive privat)</label>
+  <textarea name="refreshToken" required placeholder="1//04..."></textarea>
+
+  <label>OAuth Client ID</label>
+  <input name="clientId" required placeholder="139308628555-...apps.googleusercontent.com">
+
+  <label>OAuth Client Secret</label>
+  <input name="clientSecret" required placeholder="GOCSPX-...">
+
+  <label>Drive Folder ID (carpeta arrel privada)</label>
+  <input name="folderId" required placeholder="1-88fTeMrbIsxk0DiVNTvgk1tnc-c2-Ro">
+
+  <label>Contrasenya mestra (mínim 10 caràcters)</label>
+  <input name="password" type="password" required minlength="10" autocomplete="new-password">
+
+  <label>Repeteix la contrasenya</label>
+  <input name="password2" type="password" required minlength="10" autocomplete="new-password">
+
+  <br><br>
+  <button type="submit" id="goBtn">Xifrar i desar a Firestore</button>
+</form>
+
+<div id="msg"></div>
+
+<script>
+const FIREBASE_PROJECT = 'mergecloud-privat';
+const FIREBASE_API_KEY = 'AIzaSyBAL1nJJURuVvoWxZgljYDPavoblhMsPto';
+const FIRESTORE_DOC_URL =
+  `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT}/databases/(default)/documents/secrets/privat?key=${FIREBASE_API_KEY}`;
+
+const b64 = {
+  enc: buf => btoa(String.fromCharCode(...new Uint8Array(buf))),
+  dec: s   => Uint8Array.from(atob(s), c => c.charCodeAt(0)),
+};
+
+async function deriveKey(password, salt) {
+  const base = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: 310000, hash: 'SHA-256' },
+    base,
+    { name: 'AES-GCM', length: 256 },
+    false, ['encrypt', 'decrypt']);
+}
+
+function msg(kind, html) {
+  document.getElementById('msg').innerHTML = `<div class="${kind}">${html}</div>`;
+}
+
+document.getElementById('setupForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const btn = document.getElementById('goBtn');
+  btn.disabled = true;
+  msg('', '');
+  try {
+    const data = Object.fromEntries(new FormData(e.target));
+    if (data.password !== data.password2) throw new Error('Les dues contrasenyes no coincideixen.');
+    if (data.password.length < 10) throw new Error('Contrasenya massa curta (mínim 10 caràcters).');
+
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv   = crypto.getRandomValues(new Uint8Array(12));
+    const key  = await deriveKey(data.password, salt);
+    const payload = JSON.stringify({
+      refreshToken: data.refreshToken.trim(),
+      clientId:     data.clientId.trim(),
+      clientSecret: data.clientSecret.trim(),
+      folderId:     data.folderId.trim(),
+    });
+    const cipherBuf = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv }, key, new TextEncoder().encode(payload));
+
+    const body = {
+      fields: {
+        salt:    { stringValue: b64.enc(salt) },
+        iv:      { stringValue: b64.enc(iv) },
+        cipher:  { stringValue: b64.enc(cipherBuf) },
+        version: { integerValue: '1' },
+        updatedAt: { timestampValue: new Date().toISOString() },
+      },
+    };
+    const res = await fetch(FIRESTORE_DOC_URL, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error('Firestore: ' + res.status + ' — ' + await res.text());
+
+    // Verificació: desxifra el que acabem d'escriure amb la mateixa contrasenya.
+    const verify = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, cipherBuf);
+    if (new TextDecoder().decode(verify) !== payload) throw new Error('Verificació fallida');
+
+    msg('ok',
+      `<strong>✓ Fet.</strong> El token xifrat ja és a Firestore.<br><br>
+       Pròxims passos:<br>
+       1. <strong>Esborra <code>privat-setup.html</code></strong> del repositori.<br>
+       2. Aplica les regles de Firestore que t'he passat (lectura pública d'aquest doc, escriptura prohibida).<br>
+       3. Al botó "🔒 Privat" de l'app, posa la mateixa contrasenya.`);
+    btn.textContent = 'Fet — tanca aquesta pestanya';
+  } catch (err) {
+    msg('err', '<strong>Error:</strong> ' + err.message);
+    btn.disabled = false;
+  }
+});
+</script>
+
+</body>
+</html>
