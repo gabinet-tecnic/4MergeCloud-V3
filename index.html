@@ -991,36 +991,10 @@
         </div>
       </div>
 
-      <!-- ORTOIMATGE -->
-      <div class="acc">
-        <div class="acc-header" data-acc="accOrtho">
-          <span><span class="acc-icon">&#128444;</span>Ortoimatge</span>
-          <span class="acc-arrow">&#9654;</span>
-        </div>
-        <div class="acc-body" id="accOrtho-body">
-          <div style="font-size:10px;color:#889;margin-bottom:4px">Tria la vista i enquadra:</div>
-          <div class="btn-row" style="flex-wrap:wrap;gap:3px">
-            <button data-ortho-view="PL" style="flex:1;min-width:0">Planta</button>
-            <button data-ortho-view="SO" style="flex:1;min-width:0">Sostre</button>
-            <button data-ortho-view="FR" style="flex:1;min-width:0">Front</button>
-            <button data-ortho-view="PO" style="flex:1;min-width:0">Posterior</button>
-            <button data-ortho-view="LD" style="flex:1;min-width:0">Dret</button>
-            <button data-ortho-view="LE" style="flex:1;min-width:0">Esq.</button>
-          </div>
-          <div style="display:flex;align-items:center;gap:6px;margin-top:8px">
-            <span style="font-size:10px;color:#aab;min-width:70px">Resolució</span>
-            <input id="orthoPxPerM" type="number" min="10" max="2000" step="10" value="200" style="flex:1;background:#1a2030;border:1px solid #2a3050;color:#eaf;padding:4px 6px;border-radius:4px;font-size:11px">
-            <span style="font-size:10px;color:#9cf">px/m</span>
-          </div>
-          <div id="orthoFrameInfo" style="font-size:10px;color:#667;margin-top:4px;line-height:1.3"></div>
-          <div class="btn-row" style="margin-top:6px">
-            <button id="orthoCapture" class="btn-green" style="flex:2">&#128247; Capturar ortoimatge</button>
-          </div>
-          <div style="font-size:10px;color:#667;margin-top:4px;line-height:1.3">
-            Es desa un PNG + fitxer de georeferència (.pgw / .wld) + sidecar .txt amb els límits mundials. Útil per inserir a CAD/GIS a escala real.
-          </div>
-        </div>
-      </div>
+      <!-- ORTOIMATGE eliminat de la UI (v3-2026102603). Les funcions
+           _orthoCapture / _orthoSetViewByCode / _computeHSlabPlanes / _exportHSlab
+           continuen a main.js per si l'IA necessita generar vistes ortogonals
+           internes (p. ex. per detecció d'objectes des de planta). -->
 
       <!-- FILTRE DE SOROLL -->
       <div class="acc">
@@ -1394,7 +1368,7 @@
   <script src="https://apis.google.com/js/api.js" async defer></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="drive.js"></script>
-  <script type="module" src="main.js?v=v3-2026102602"></script>
+  <script type="module" src="main.js?v=v3-2026102603"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
