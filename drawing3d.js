@@ -13,6 +13,17 @@ export function createEditor2D(ctx) {
   workGrid.name='Quadrícula de dibuix';workGrid.visible=false;
   workGrid.material.transparent=true;workGrid.material.opacity=0.18;
   workGrid.material.depthWrite=false;scene.add(workGrid);
+  // Rectangle translúcid taronja per fer visible el pla de dibuix en perspectiva.
+  const planeViz=new THREE.Mesh(
+    new THREE.PlaneGeometry(20,20),
+    new THREE.MeshBasicMaterial({color:0xffb84d,transparent:true,opacity:0.09,side:THREE.DoubleSide,depthWrite:false})
+  );
+  planeViz.name='Pla de dibuix (visualització)';planeViz.visible=false;planeViz.renderOrder=1;scene.add(planeViz);
+  const planeBorder=new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.PlaneGeometry(20,20)),
+    new THREE.LineBasicMaterial({color:0xff8a1a,transparent:true,opacity:0.55,depthTest:false})
+  );
+  planeBorder.name='Marc del pla';planeBorder.visible=false;planeBorder.renderOrder=2;scene.add(planeBorder);
   let gridEnabled=true;
   const initialPlane=plane(), initialLayer=layer('Dibuix 1');
   let state={version:2,planes:[initialPlane],layers:[initialLayer],strokes:[],activePlane:initialPlane.id,activeLayer:initialLayer.id};
@@ -22,6 +33,27 @@ export function createEditor2D(ctx) {
   const getPlane = id => state.planes.find(p=>p.id===id);
   const getLayer = id => state.layers.find(l=>l.id===id);
   const editable = s => { const l=getLayer(s.layerId); return l?.visible && !l.locked && s.layerId===state.activeLayer; };
+  function drawSurfaceStroke(s, highlight=false) {
+    if(!s.points3d || s.points3d.length<2) return;
+    const positions=[];
+    for(let i=1;i<s.points3d.length;i++) {
+      const a=s.points3d[i-1], b=s.points3d[i];
+      positions.push(a[0],a[1],a[2], b[0],b[1],b[2]);
+    }
+    const g=new THREE.BufferGeometry();
+    g.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));
+    const line=new THREE.LineSegments(g, new THREE.LineBasicMaterial({
+      color: highlight?'#ffffff':s.color, depthTest:!through, depthWrite:false, linewidth:2
+    }));
+    line.renderOrder=10; group.add(line);
+    // Petits punts a cada mostra per fer el traç visible fins i tot si WebGL
+    // ignora linewidth (gairebé tots els drivers moderns).
+    const pts=new THREE.Points(
+      new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(s.points3d.flat(),3)),
+      new THREE.PointsMaterial({color:highlight?'#ffffff':s.color, size:Math.max(s.width*2,0.015), sizeAttenuation:true, depthTest:!through, depthWrite:false})
+    );
+    pts.renderOrder=10; group.add(pts);
+  }
   const world = (p,q) => V(p.origin).addScaledVector(V(p.u),q[0]).addScaledVector(V(p.v),q[1]);
   const local = (p,w) => { const d=w.clone().sub(V(p.origin)); return [d.dot(V(p.u)),d.dot(V(p.v))]; };
   const project = (p,q) => {
@@ -41,6 +73,7 @@ export function createEditor2D(ctx) {
   function hitStroke(e) {
     let best=null, distance=12;
     for(const s of state.strokes.filter(editable)) {
+      if(s.surface) continue; // els traços sobre superfície no es poden ajustar en 2D
       const p=getPlane(s.planeId);
       for(let i=1;i<s.points.length;i++) {
         const a=project(p,s.points[i-1]), b=project(p,s.points[i]);
@@ -89,16 +122,25 @@ export function createEditor2D(ctx) {
   }
   function updateGrid() {
     const p=getPlane(state.activePlane);if(!p)return;
+    const u=V(p.u), v=V(p.v), n=u.clone().cross(v).normalize();
     workGrid.position.copy(V(p.origin));
-    workGrid.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(V(p.u),V(p.v).cross(V(p.u)),V(p.v)));
+    workGrid.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(u,v.clone().cross(u),v));
     workGrid.visible=active&&gridEnabled;
+    // El rectangle translúcid comparteix origen i orientació del pla. Com que
+    // PlaneGeometry viu al pla XY (normal +Z), fem rotació de +Z→n i orientem
+    // l'eix X cap a u.
+    const basis=new THREE.Matrix4().makeBasis(u,v.clone().sub(u.clone().multiplyScalar(v.dot(u))).normalize(),n);
+    planeViz.position.copy(V(p.origin));planeViz.quaternion.setFromRotationMatrix(basis);
+    planeBorder.position.copy(planeViz.position);planeBorder.quaternion.copy(planeViz.quaternion);
+    const show=active&&gridEnabled&&mode!=='surface';
+    planeViz.visible=show;planeBorder.visible=show;
   }
 
   function render() {
     updateGrid();
     disposeChildren();
-    for(const s of state.strokes) if(getLayer(s.layerId)?.visible) drawStroke(s,s.id===selected);
-    if(gesture?.stroke) drawStroke(gesture.stroke);
+    for(const s of state.strokes) if(getLayer(s.layerId)?.visible) (s.surface?drawSurfaceStroke:drawStroke)(s,s.id===selected);
+    if(gesture?.stroke) (gesture.stroke.surface?drawSurfaceStroke:drawStroke)(gesture.stroke);
     if(gesture?.rect) {
       const [a,b]=gesture.rect;
       drawStroke({planeId:state.activePlane,points:[a,[b[0],a[1]],b,[a[0],b[1]],a],width,color:'#ff6666'});
@@ -152,6 +194,26 @@ export function createEditor2D(ctx) {
       change(()=>{const p=plane('Pla '+(state.planes.length+1),a.toArray(),u.toArray(),v.toArray());state.planes.push(p);state.activePlane=p.id;});
       picking=[];api.setMode('draw');status('Pla fixat amb tres punts. Ja hi pots dibuixar.');return;
     }
+    if(mode==='plane-surface') {
+      const hit=ctx.pickSurface?.(e.clientX,e.clientY);
+      if(!hit){status('Clica sobre el model o el núvol per crear-hi un pla tangent.');return;}
+      const n=hit.normal.clone().normalize();
+      // u: direcció tangent arbitrària perpendicular a n (preferim horitzontal si cap)
+      let u=new THREE.Vector3(1,0,0);
+      if(Math.abs(u.dot(n))>0.9) u.set(0,1,0);
+      u.sub(n.clone().multiplyScalar(u.dot(n))).normalize();
+      const v=n.clone().cross(u).normalize();
+      change(()=>{const p=plane('Pla superfície '+(state.planes.length+1),hit.point.toArray(),u.toArray(),v.toArray());state.planes.push(p);state.activePlane=p.id;});
+      api.setMode('draw');status('Pla tangent creat. Ja hi pots dibuixar.');return;
+    }
+    if(mode==='surface') {
+      const hit=ctx.pickSurface?.(e.clientX,e.clientY);
+      if(!hit){status('Comença el traç sobre el model o el núvol.');return;}
+      const before=clone(state);
+      gesture={id:e.pointerId,before,last:[e.clientX,e.clientY],surface:true,
+        stroke:{id:uid(),layerId:state.activeLayer,surface:true,color,width,points3d:[hit.point.toArray()]}};
+      canvas.setPointerCapture(e.pointerId);render();refresh();return;
+    }
     const l=getLayer(state.activeLayer);
     if(!l?.visible||l.locked){status('Mostra i desbloqueja la capa activa per editar-la.');return;}
     const before=clone(state);
@@ -180,6 +242,16 @@ export function createEditor2D(ctx) {
   function move(e) {
     if(!active||!gesture||e.pointerId!==gesture.id||e.pointerType==='touch')return;
     e.preventDefault();e.stopImmediatePropagation();
+    if(gesture.surface) {
+      const samples=e.getCoalescedEvents?.()||[];
+      for(const ev of (samples.length?samples:[e])) {
+        const h=ctx.pickSurface?.(ev.clientX,ev.clientY); if(!h) continue;
+        const prev=gesture.stroke.points3d.at(-1);
+        const dx=h.point.x-prev[0], dy=h.point.y-prev[1], dz=h.point.z-prev[2];
+        if(dx*dx+dy*dy+dz*dz>1e-10) gesture.stroke.points3d.push([h.point.x,h.point.y,h.point.z]);
+      }
+      gesture.last=[e.clientX,e.clientY];render();return;
+    }
     const q=onPlane(e);if(!q)return;
     if(gesture.selected) {
       const s=state.strokes.find(x=>x.id===gesture.selected);
@@ -212,7 +284,8 @@ export function createEditor2D(ctx) {
     if(!gesture||gesture.id!==e.pointerId)return;
     e.preventDefault();e.stopImmediatePropagation();move(e);
     const g=gesture;
-    if(g.stroke && g.stroke.points.some(p=>Math.hypot(p[0]-g.start[0],p[1]-g.start[1])>1e-6))state.strokes.push(g.stroke);
+    if(g.surface && g.stroke && g.stroke.points3d.length>=2) state.strokes.push(g.stroke);
+    else if(g.stroke && g.stroke.points?.some(p=>Math.hypot(p[0]-g.start[0],p[1]-g.start[1])>1e-6))state.strokes.push(g.stroke);
     if(g.rect) { const [a,b]=g.rect;applyCut({kind:'rect',min:[Math.min(a[0],b[0]),Math.min(a[1],b[1])],max:[Math.max(a[0],b[0]),Math.max(a[1],b[1])]}); }
     gesture=null;if(canvas.hasPointerCapture(e.pointerId))canvas.releasePointerCapture(e.pointerId);commit(g.before);
   }
@@ -239,7 +312,7 @@ export function createEditor2D(ctx) {
   `;document.head.append(style);
   const panel=document.createElement('section');panel.id='drawingPalette';panel.hidden=true;panel.setAttribute('aria-label','Eines de dibuix 3D');
   panel.innerHTML=`<header><strong>Dibuix</strong><button data-action="collapse" title="Plegar eines" aria-label="Plegar eines">−</button><button data-action="close" title="Sortir del dibuix" aria-label="Sortir del dibuix">×</button></header><div class="body">
-    <div class="grid">${[['draw','Dibuixar'],['select','Moure'],['erase','Goma'],['trim','Retallar']].map(([m,t])=>`<button data-mode="${m}">${t}</button>`).join('')}</div>
+    <div class="grid">${[['draw','Dibuixar'],['surface','Sobre superfície'],['select','Moure'],['erase','Goma'],['trim','Retallar']].map(([m,t])=>`<button data-mode="${m}">${t}</button>`).join('')}</div>
     <div class="row"><input data-color type="color" value="#ffb84d" aria-label="Color del traç"><label>Gruix <input data-width type="number" min="1" max="1000" value="10" step="1" aria-label="Gruix del traç en mil·límetres"> mm</label></div>
     <div class="row equal muted"><button data-action="undo">Desfer</button><button data-action="redo">Refer</button></div>
     <div class="row equal"><button data-action="face">Vista plana</button><button data-action="perspective">Vista 3D</button></div>
@@ -251,6 +324,7 @@ export function createEditor2D(ctx) {
       <div class="row"><select data-plane aria-label="Pla de treball"></select></div>
       <div class="row"><select data-axis aria-label="Orientació del nou pla"><option value="top">Terra</option><option value="front">Façana</option><option value="side">Lateral</option></select><input data-offset aria-label="Posició del pla en metres" type="number" value="0" step="0.1"><span>m</span></div>
       <div class="row"><button data-action="plane">Crear pla</button><button data-mode="plane-pick">Triar 3 punts</button></div>
+      <div class="row"><button data-mode="plane-surface">Pla des de clic (tangent)</button></div>
       <label><input data-grid type="checkbox" checked> Quadrícula</label>
     </details>
     <details data-section="tools"><summary>Més eines</summary>
@@ -360,7 +434,13 @@ export function createEditor2D(ctx) {
     const ids=items=>items.every(x=>typeof x.id==='string')&&new Set(items.map(x=>x.id)).size===items.length;
     if(!ids(s.planes)||!ids(s.layers)||!ids(s.strokes))throw Error('Identificadors de dibuix no vàlids');
     for(const p of s.planes)if(!finite(p.origin,3)||!finite(p.u,3)||!finite(p.v,3)||Math.abs(V(p.u).length()-1)>1e-5||Math.abs(V(p.v).length()-1)>1e-5||Math.abs(V(p.u).dot(V(p.v)))>1e-5)throw Error('Pla de dibuix no vàlid');
-    for(const x of s.strokes)if(!s.planes.some(p=>p.id===x.planeId)||!s.layers.some(l=>l.id===x.layerId)||!Array.isArray(x.points)||x.points.length<2||!x.points.every(p=>finite(p,2))||!Number.isFinite(x.width)||x.width<=0||!/^#[0-9a-f]{6}$/i.test(x.color))throw Error('Traç no vàlid');
+    for(const x of s.strokes){
+      if(x.surface){
+        if(!s.layers.some(l=>l.id===x.layerId)||!Array.isArray(x.points3d)||x.points3d.length<2||!x.points3d.every(p=>finite(p,3))||!Number.isFinite(x.width)||x.width<=0||!/^#[0-9a-f]{6}$/i.test(x.color))throw Error('Traç sobre superfície no vàlid');
+        continue;
+      }
+      if(!s.planes.some(p=>p.id===x.planeId)||!s.layers.some(l=>l.id===x.layerId)||!Array.isArray(x.points)||x.points.length<2||!x.points.every(p=>finite(p,2))||!Number.isFinite(x.width)||x.width<=0||!/^#[0-9a-f]{6}$/i.test(x.color))throw Error('Traç no vàlid');
+    }
     if(!s.planes.some(p=>p.id===s.activePlane))s.activePlane=s.planes[0].id;
     if(!s.layers.some(l=>l.id===s.activeLayer))s.activeLayer=s.layers[0].id;
     return s;
@@ -397,12 +477,12 @@ export function createEditor2D(ctx) {
       if(value){const welcome=document.getElementById('welcomeScreen');if(welcome)welcome.style.display='none';const r=canvas.getBoundingClientRect();if(!onPlane({clientX:r.left+r.width/2,clientY:r.top+r.height/2}))ctx.alignToPlane(getPlane(state.activePlane));clampPanel();status('');}
       else{canvas.style.cursor='default';selected=null;render();}
     },
-    setMode(value){cancel();mode=value;picking=[];render();ctx.setDrawingNavigation(active,value==='navigate');canvas.style.cursor=value==='navigate'?'grab':'crosshair';refresh();status(value==='trim'?'Arrossega un rectangle: retalla els fragments interiors de la capa i el pla actius.':value==='erase'?'Goma: elimina fragments de la capa i el pla actius.':value==='plane-pick'?'Tria tres punts no alineats del model.':value==='edit'?'Selecciona un traç i arrossega un dels seus quadrats.':'');},
+    setMode(value){cancel();mode=value;picking=[];render();ctx.setDrawingNavigation(active,value==='navigate');canvas.style.cursor=value==='navigate'?'grab':'crosshair';refresh();status(value==='trim'?'Arrossega un rectangle: retalla els fragments interiors de la capa i el pla actius.':value==='erase'?'Goma: elimina fragments de la capa i el pla actius.':value==='plane-pick'?'Tria tres punts no alineats del model.':value==='plane-surface'?'Clica un punt del model o del núvol per crear-hi un pla tangent.':value==='surface'?'Dibuixa amb el llapis o el ratolí: cada mostra es projecta sobre la superfície del model.':value==='edit'?'Selecciona un traç i arrossega un dels seus quadrats.':'');},
     undo:()=>history(undoStack,redoStack),redo:()=>history(redoStack,undoStack),
     clear(){change(()=>{state.strokes=[];selected=null;});},
     count:()=>({walls:state.strokes.length,nodes:state.strokes.reduce((n,s)=>n+s.points.length,0),openings:0}),
     addShape(sh){change(()=>{const old=migrate({shapes:[sh]});for(const p of old.planes)state.planes.push(p);for(const s of old.strokes)state.strokes.push({...s,layerId:state.activeLayer});});},
-    dispose(){cancel();canvas.removeEventListener('pointerdown',down,true);canvas.removeEventListener('pointermove',move,true);canvas.removeEventListener('pointerup',up,true);canvas.removeEventListener('pointercancel',pointerCancel,true);canvas.removeEventListener('lostpointercapture',pointerCancel,true);window.removeEventListener('pointerup',releaseTouch,true);window.removeEventListener('pointercancel',releaseTouch,true);window.removeEventListener('blur',blur);window.removeEventListener('resize',clampPanel);document.removeEventListener('keydown',key,true);disposeChildren();scene.remove(group);scene.remove(workGrid);workGrid.geometry.dispose();workGrid.material.dispose();panel.remove();style.remove();intro.remove();},
+    dispose(){cancel();canvas.removeEventListener('pointerdown',down,true);canvas.removeEventListener('pointermove',move,true);canvas.removeEventListener('pointerup',up,true);canvas.removeEventListener('pointercancel',pointerCancel,true);canvas.removeEventListener('lostpointercapture',pointerCancel,true);window.removeEventListener('pointerup',releaseTouch,true);window.removeEventListener('pointercancel',releaseTouch,true);window.removeEventListener('blur',blur);window.removeEventListener('resize',clampPanel);document.removeEventListener('keydown',key,true);disposeChildren();scene.remove(group);scene.remove(workGrid);workGrid.geometry.dispose();workGrid.material.dispose();scene.remove(planeViz);planeViz.geometry.dispose();planeViz.material.dispose();scene.remove(planeBorder);planeBorder.geometry.dispose();planeBorder.material.dispose();panel.remove();style.remove();intro.remove();},
   };
   refresh();return api;
 }

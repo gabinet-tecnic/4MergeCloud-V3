@@ -1423,6 +1423,57 @@ function _downloadBlob(blob, name) {
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
+// Estima la normal a un punt d'un núvol usant els K veïns més propers
+// (anàlisi PCA / covariança). Retorna un THREE.Vector3 normalitzat o null si
+// la mostra no és fiable.
+function _estimateNormalAt(pointsObj, hitIndex, K = 20) {
+  const pos = pointsObj.geometry?.attributes?.position;
+  if (!pos || !Number.isInteger(hitIndex) || hitIndex < 0 || hitIndex >= pos.count) return null;
+  pointsObj.updateMatrixWorld(true);
+  const mw = pointsObj.matrixWorld;
+  const center = new THREE.Vector3().fromBufferAttribute(pos, hitIndex).applyMatrix4(mw);
+  // Cerca naive: itera uns 2000 índexs al voltant del hit (barat i prou pel
+  // nostre cas; una kd-tree real seria exagerat per un sol click puntual).
+  const windowSize = Math.min(2000, pos.count);
+  const halfW = Math.floor(windowSize / 2);
+  const start = Math.max(0, hitIndex - halfW);
+  const end   = Math.min(pos.count, hitIndex + halfW);
+  const neighbors = [];
+  const v = new THREE.Vector3();
+  for (let i = start; i < end; i++) {
+    v.fromBufferAttribute(pos, i).applyMatrix4(mw);
+    const d2 = v.distanceToSquared(center);
+    if (d2 > 0) neighbors.push({ i, d2, v: v.clone() });
+  }
+  neighbors.sort((a, b) => a.d2 - b.d2);
+  const sel = neighbors.slice(0, K);
+  if (sel.length < 3) return null;
+  // Covariança 3×3 dels desplaçaments respecte al centroide
+  let cx = 0, cy = 0, cz = 0;
+  for (const n of sel) { cx += n.v.x; cy += n.v.y; cz += n.v.z; }
+  cx /= sel.length; cy /= sel.length; cz /= sel.length;
+  let xx=0,xy=0,xz=0,yy=0,yz=0,zz=0;
+  for (const n of sel) {
+    const dx = n.v.x - cx, dy = n.v.y - cy, dz = n.v.z - cz;
+    xx += dx*dx; xy += dx*dy; xz += dx*dz;
+    yy += dy*dy; yz += dy*dz; zz += dz*dz;
+  }
+  // Eigenvector amb eigenvalue més petit (direcció de menor variança = normal).
+  // Fem servir una iteració senzilla de potència inversa aproximada: la columna
+  // del adjunt amb la norma més gran dóna el vector buscat per 3×3 singular.
+  const adj = [
+    yy*zz - yz*yz,  xz*yz - xy*zz,  xy*yz - xz*yy,
+    xz*yz - xy*zz,  xx*zz - xz*xz,  xy*xz - yz*xx,
+    xy*yz - xz*yy,  xy*xz - yz*xx,  xx*yy - xy*xy,
+  ];
+  const cols = [[adj[0],adj[3],adj[6]],[adj[1],adj[4],adj[7]],[adj[2],adj[5],adj[8]]];
+  let best = cols[0], bestLen = cols[0][0]**2+cols[0][1]**2+cols[0][2]**2;
+  for (const c of cols) { const L = c[0]**2+c[1]**2+c[2]**2; if (L > bestLen) { bestLen = L; best = c; } }
+  if (bestLen < 1e-20) return null;
+  const n = new THREE.Vector3(best[0], best[1], best[2]).normalize();
+  return n;
+}
+
 // ── Submostreig per mantenir fluidesa en dispositius amb poca memòria ────
 // Si un núvol passa de 2.5M punts, agafem un de cada N perquè l'iPad/Safari
 // no es quedi penjat. L'usuari ho pot desactivar amb window._subsampleEnabled=false.
@@ -7973,6 +8024,35 @@ async function _ensureEditor2D() {
       return hit.object.isPoints && Number.isInteger(hit.index)
         ? new THREE.Vector3().fromBufferAttribute(hit.object.geometry.attributes.position,hit.index).applyMatrix4(hit.object.matrixWorld)
         : hit.point.clone();
+    },
+    // Com pickSurfacePoint però retorna també una normal estimada. Per malla
+    // usa la normal de la cara impactada (passada a coords món). Per núvols
+    // de punts estima la normal amb els 20 veïns més propers (eigenvector amb
+    // valor propi més petit) i, si no és fiable, cau a (0,1,0).
+    pickSurface: (x,y) => {
+      const r = renderer.domElement.getBoundingClientRect(), rc = new THREE.Raycaster();
+      rc.params.Points.threshold = 0.15;
+      rc.setFromCamera(new THREE.Vector2((x-r.left)/r.width*2-1, 1-(y-r.top)/r.height*2), useOrtho ? orthoCamera : camera);
+      const visible = o => { for(let n=o;n;n=n.parent) if(!n.visible)return false;return true; };
+      const hits = rc.intersectObjects(clouds.filter(c=>c.visible),true).filter(h=>visible(h.object));
+      if (!hits.length) return null;
+      const hit = hits[0];
+      let point, normal = null;
+      if (hit.object.isMesh && hit.face) {
+        point = hit.point.clone();
+        normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize();
+      } else if (hit.object.isPoints && Number.isInteger(hit.index)) {
+        point = new THREE.Vector3().fromBufferAttribute(hit.object.geometry.attributes.position,hit.index).applyMatrix4(hit.object.matrixWorld);
+        normal = _estimateNormalAt(hit.object, hit.index) || new THREE.Vector3(0,1,0);
+      } else {
+        point = hit.point.clone();
+      }
+      if (!normal || normal.lengthSq() < 1e-10) normal = new THREE.Vector3(0,1,0);
+      // Orienta la normal cap a càmera perquè els dibuixos tangents siguin coherents
+      const cam = useOrtho ? orthoCamera : camera;
+      const toCam = cam.position.clone().sub(point);
+      if (normal.dot(toCam) < 0) normal.multiplyScalar(-1);
+      return { point, normal };
     },
     screenToWorld:      (x, y) => _traceRaycast(x, y),
     // Snap al núvol de punts: retorna la posició d'un punt del núvol si n'hi ha
