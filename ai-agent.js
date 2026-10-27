@@ -225,6 +225,44 @@
     }
   }
 
+  // API pública perquè altres mòduls puguin fer servir l'agent
+  window.MCAgent = {
+    // Obre el xat (demanant contrasenya si cal) amb un primer missatge ja escrit
+    // però SENSE enviar-lo encara: l'usuari pot editar-lo.
+    prefill(text) {
+      openPanel();
+      setTimeout(() => { if (inputEl) { inputEl.value = text || ''; inputEl.focus(); } }, 60);
+    },
+    // Obre el xat i envia la pregunta directament (si hi ha contrasenya).
+    async askQuestion(text, options = {}) {
+      openPanel();
+      if (!getPassword()) { renderBanner(); return; }
+      inputEl.value = text;
+      await submit();
+    },
+    // Envia un bloc de text llarg (p.ex. log de diagnòstic) com a missatge inicial
+    // d'un xat nou. Comença conversa de zero per no barrejar context.
+    async submitDiagnostic(logText, hint) {
+      openPanel();
+      if (!getPassword()) {
+        renderBanner();
+        // Esperem que posi la contrasenya
+        const check = setInterval(() => {
+          if (getPassword()) { clearInterval(check); submitDiagnostic(logText, hint); }
+        }, 500);
+        return;
+      }
+      clearHistory();
+      renderHistory();
+      const prompt = (hint || 'Analitza aquest registre de diagnòstic de l\'app 4MergeCloud. Resumeix els errors trobats, identifica\'n la causa més probable i suggereix solucions concretes. Si hi ha warnings irrellevants, ignora\'ls.')
+        + '\n\n```log\n' + logText.slice(0, 15000) + '\n```';
+      inputEl.value = prompt;
+      await submit();
+    },
+    openPanel,
+    isUnlocked: () => !!getPassword(),
+  };
+
   function bind() {
     const btn = document.getElementById('tbAIAgent');
     if (btn) btn.addEventListener('click', openPanel);

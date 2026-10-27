@@ -8529,6 +8529,16 @@ function initDiagUI() {
     const b = document.getElementById('diagCopy');
     if (b) { const t = b.textContent; b.textContent = '✓ Copiat'; setTimeout(() => { b.textContent = t; }, 1200); }
   });
+  document.getElementById('diagAskClaude')?.addEventListener('click', async () => {
+    const txt = _buildDiagText();
+    if (!window.MCAgent?.submitDiagnostic) {
+      alert('L\'agent IA no està disponible. Comprova que el navegador ha carregat ai-agent.js.');
+      return;
+    }
+    const b = document.getElementById('diagAskClaude');
+    if (b) { const t = b.textContent; b.textContent = '📨 Enviant…'; setTimeout(() => { b.textContent = t; }, 1500); }
+    await window.MCAgent.submitDiagnostic(txt);
+  });
 }
 
 // Format complet per al text de diagnòstic (amb comentari opcional de l'usuari al davant)
