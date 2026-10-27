@@ -6,9 +6,7 @@
 // sobre el que es veu.
 
 (function () {
-  const FUNCTION_URL = 'https://ask-cjnddmyf7a-ew.a.run.app';
-  // La URL definitiva te la dóna 'firebase deploy'. Si canvia, actualitza-la aquí.
-  // Format habitual: https://ask-<hash>-ew.a.run.app  (ew = europe-west1)
+  const FUNCTION_URL = 'https://europe-west1-mergecloud-privat.cloudfunctions.net/ask';
 
   const PW_KEY = '4mc_ai_pw';
   const HISTORY_KEY = '4mc_ai_history';
