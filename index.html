@@ -657,6 +657,7 @@
     <button id="tbOpen" class="tb-btn" title="Obrir fitxers locals o del Google Drive">Obrir</button>
     <button id="tbSave" class="tb-btn" title="Desar: tria format (PLY/LAS/XYZ/OBJ/GLB/Projecte) i destí (local o Drive)">Desar</button>
     <button id="tbPrivat" class="tb-btn" title="Drive privat (requereix contrasenya)">🔒 Privat</button>
+    <button id="tbAIAgent" class="tb-btn" title="Agent IA (Claude Sonnet 4.5) — requereix contrasenya">🧠 IA</button>
     <span class="tb-spacer"></span>
     <div id="langToggle">
       <button class="lang-btn" data-lang="ca">CAT</button>
@@ -1370,7 +1371,8 @@
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="drive.js"></script>
   <script src="privat.js?v=v3-2026102605"></script>
-  <script type="module" src="main.js?v=v3-2026102605"></script>
+  <script src="ai-agent.js?v=v3-2026102701"></script>
+  <script type="module" src="main.js?v=v3-2026102701"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {

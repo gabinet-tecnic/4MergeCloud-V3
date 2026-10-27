@@ -1,0 +1,12 @@
+{
+  "name": "4mergecloud-functions",
+  "version": "1.0.0",
+  "description": "Firebase Functions for 4MergeCloud (Claude agent + password gate)",
+  "main": "index.js",
+  "engines": { "node": "20" },
+  "dependencies": {
+    "firebase-functions": "^5.0.0",
+    "@anthropic-ai/sdk": "^0.30.0"
+  },
+  "private": true
+}
