@@ -78,7 +78,7 @@ exports.ask = onRequest(
       const { pw, messages, system, context } = req.body || {};
       if (typeof pw !== 'string' || !pw) { res.status(400).json({ error: 'Falta contrasenya' }); return; }
 
-      const expected = AI_PASSWORD_HASH.value();
+      const expected = AI_PASSWORD_HASH.value().trim(); // tolerar \n al final del secret
       const got = sha256Hex(pw);
       if (!timingSafeEqualHex(expected, got)) {
         res.status(401).json({ error: 'Contrasenya incorrecta' });
